@@ -1,0 +1,172 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+:root {
+  /* WhatsApp Web (light) palette */
+  --wa-header-bg: #008069;
+  --wa-header-bg-dark: #00674f;
+  --wa-header-text: #ffffff;
+  --wa-header-icon: #f7f7f7;
+
+  --wa-panel-bg: #ffffff;
+  --wa-panel-soft: #f0f2f5;
+  --wa-panel-border: #e9edef;
+  --wa-panel-hover: #f5f6f6;
+  --wa-panel-active: #f0f2f5;
+
+  --wa-chat-bg: #efeae2;
+  --wa-chat-bg-tint: #d9d4cc;
+
+  --wa-bubble-out: #d9fdd3;
+  --wa-bubble-in: #ffffff;
+  --wa-bubble-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+
+  --wa-text-primary: #111b21;
+  --wa-text-secondary: #667781;
+  --wa-text-muted: #8696a0;
+
+  --wa-tick: #8696a0;
+  --wa-tick-read: #53bdeb;
+  --wa-tick-failed: #ea4335;
+
+  --wa-accent: #00a884;
+  --wa-accent-dark: #008069;
+  --wa-unread: #25d366;
+
+  --wa-link: #027eb5;
+  --wa-date-pill-bg: rgba(255, 255, 255, 0.92);
+  --wa-date-pill-text: #54656f;
+  --wa-system-pill-bg: #fff3c4;
+  --wa-system-pill-text: #54656f;
+
+  --wa-divider: rgba(134, 150, 160, 0.18);
+
+  /* Layout */
+  --wa-sidebar-width: 30%;
+  --wa-sidebar-min: 320px;
+  --wa-sidebar-max: 420px;
+  --wa-header-height: 60px;
+  --wa-input-height: 62px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+html,
+body {
+  /* Prevent iOS Safari rubber-band scroll that breaks fixed layouts */
+  position: fixed;
+  inset: 0;
+}
+
+body {
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue',
+    Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--wa-panel-bg);
+  color: var(--wa-text-primary);
+  font-size: 14.5px;
+  line-height: 1.4;
+}
+
+input,
+textarea,
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(134, 150, 160, 0.32);
+  border-radius: 6px;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(134, 150, 160, 0.55);
+}
+
+/* Utilities */
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.line-clamp-1 {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Mobile */
+@media (max-width: 900px) {
+  :root {
+    --wa-sidebar-width: 100%;
+    --wa-sidebar-min: 100%;
+    --wa-sidebar-max: 100%;
+    --wa-header-height: 56px;
+  }
+}
