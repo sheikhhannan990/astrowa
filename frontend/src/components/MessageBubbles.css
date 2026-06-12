@@ -1,0 +1,188 @@
+.mb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ---------- Date divider ---------- */
+.mb-date-divider {
+  display: flex;
+  justify-content: center;
+  margin: 12px 0;
+}
+
+.mb-date-divider span {
+  background-color: var(--wa-date-pill-bg);
+  color: var(--wa-date-pill-text);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 7.5px;
+  box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+}
+
+/* ---------- Rows ---------- */
+.mb-row {
+  display: flex;
+  width: 100%;
+  margin: 1px 0;
+  padding: 0 8px;
+  animation: pop 0.18s ease-out;
+}
+
+.mb-row.out {
+  justify-content: flex-end;
+}
+
+.mb-row.in {
+  justify-content: flex-start;
+}
+
+/* ---------- Bubble ---------- */
+.mb-bubble {
+  position: relative;
+  max-width: 65%;
+  padding: 6px 9px 8px 9px;
+  border-radius: 7.5px;
+  font-size: 14.5px;
+  line-height: 1.45;
+  color: var(--wa-text-primary);
+  box-shadow: var(--wa-bubble-shadow);
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.mb-bubble.in {
+  background-color: var(--wa-bubble-in);
+  border-top-left-radius: 7.5px;
+}
+
+.mb-bubble.out {
+  background-color: var(--wa-bubble-out);
+  border-top-right-radius: 7.5px;
+}
+
+/* WhatsApp-style tail using a CSS pseudo-element. We only render the tail
+   on the first bubble of a sender's group to mimic real WhatsApp. */
+.mb-bubble.has-tail.in {
+  border-top-left-radius: 0;
+}
+
+.mb-bubble.has-tail.out {
+  border-top-right-radius: 0;
+}
+
+.mb-bubble.has-tail.in::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -8px;
+  width: 8px;
+  height: 13px;
+  background-color: var(--wa-bubble-in);
+  clip-path: polygon(100% 0, 0 0, 100% 100%);
+  filter: drop-shadow(-1px 0 0.5px rgba(11, 20, 26, 0.06));
+}
+
+.mb-bubble.has-tail.out::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: -8px;
+  width: 8px;
+  height: 13px;
+  background-color: var(--wa-bubble-out);
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+  filter: drop-shadow(1px 0 0.5px rgba(11, 20, 26, 0.06));
+}
+
+/* Failed bubble */
+.mb-bubble.failed {
+  background-color: #ffe4e1 !important;
+  border: 1px solid #f5c6c6;
+}
+
+/* Template (order confirmation) — give it a subtle accent stripe */
+.mb-bubble.is-template {
+  padding-top: 4px;
+}
+
+.mb-template-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--wa-accent-dark);
+  background-color: rgba(0, 168, 132, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-bottom: 4px;
+}
+
+/* ---------- Text ---------- */
+.mb-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding-right: 56px; /* room for the inline timestamp */
+}
+
+/* ---------- Meta (time + ticks) ---------- */
+.mb-meta {
+  position: absolute;
+  right: 8px;
+  bottom: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--wa-text-secondary);
+  line-height: 15px;
+  user-select: none;
+}
+
+.mb-time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mb-status {
+  display: inline-flex;
+  align-items: center;
+  color: var(--wa-tick);
+  margin-left: 1px;
+}
+
+.mb-status-read {
+  color: var(--wa-tick-read);
+}
+
+.mb-status-failed {
+  color: var(--wa-tick-failed);
+}
+
+.mb-status-sending {
+  color: var(--wa-tick);
+  opacity: 0.7;
+}
+
+/* ---------- Mobile ---------- */
+@media (max-width: 900px) {
+  .mb-bubble {
+    max-width: 82%;
+    font-size: 14.5px;
+  }
+
+  .mb-row {
+    padding: 0 4px;
+  }
+
+  .mb-date-divider span {
+    font-size: 12px;
+    padding: 4px 10px;
+  }
+}
