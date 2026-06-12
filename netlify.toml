@@ -1,0 +1,16 @@
+# Netlify configuration for the AstroLamps WhatsApp inbox frontend.
+# The React/Vite app lives in the `frontend/` subdirectory of this repo.
+
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# SPA fallback so client-side routes always serve index.html.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
