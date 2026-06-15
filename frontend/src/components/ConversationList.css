@@ -94,29 +94,23 @@
 /* ---------- Filter pills ---------- */
 .cl-filters {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 0 12px 8px 12px;
   background-color: var(--wa-panel-bg);
   border-bottom: 1px solid var(--wa-panel-border);
-  overflow-x: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.cl-filters::-webkit-scrollbar {
-  display: none;
 }
 
 .cl-filter {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
+  gap: 5px;
+  padding: 5px 10px;
   border: 1px solid var(--wa-panel-border);
   background-color: var(--wa-panel-soft);
   color: var(--wa-text-secondary);
   border-radius: 999px;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
@@ -389,8 +383,8 @@
   }
 
   .cl-filter {
-    padding: 5px 11px;
-    font-size: 12.5px;
+    padding: 5px 10px;
+    font-size: 12px;
   }
 
   .cl-item {
