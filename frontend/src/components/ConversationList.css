@@ -318,6 +318,11 @@
   color: #c5221f;
 }
 
+.cl-tag-notwa {
+  background-color: rgba(107, 114, 128, 0.16);
+  color: #4b5563;
+}
+
 .cl-item.is-cancelled .cl-name,
 .cl-item.is-cancelled .cl-preview {
   color: var(--wa-text-muted);

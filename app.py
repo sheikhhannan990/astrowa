@@ -5,6 +5,7 @@ import os
 import json
 import threading
 import time
+import mimetypes
 import requests
 from supabase import create_client
 
@@ -88,6 +89,95 @@ def format_phone(phone):
 # can render a status pill without needing to know template names.
 TEMPLATE_TAG_CONFIRMATION = "confirmation"
 TEMPLATE_TAG_FULFILLED = "fulfilled"
+
+# Supabase Storage bucket where incoming WhatsApp media (images, audio,
+# video, documents, stickers) gets uploaded. Bucket must exist and be
+# Public so the frontend can render the media via the returned URL.
+WHATSAPP_MEDIA_BUCKET = "whatsapp-media"
+
+
+def _ext_for_mime(mime_type):
+    """Best-effort filename extension for a given mime type."""
+    if not mime_type:
+        return ".bin"
+    base = mime_type.split(";")[0].strip()
+    return mimetypes.guess_extension(base) or ".bin"
+
+
+def fetch_whatsapp_media(media_id):
+    """Resolve a WhatsApp media id to (bytes, mime_type).
+
+    The Cloud API exposes media in two steps: first an authenticated
+    metadata call returns a short-lived (~5 min) download URL, then a
+    second authenticated request actually downloads the bytes.
+    Returns (None, None) on any failure.
+    """
+    if not media_id:
+        return None, None
+    try:
+        meta_resp = requests.get(
+            f"https://graph.facebook.com/v20.0/{media_id}",
+            headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
+            timeout=15,
+        )
+        if meta_resp.status_code != 200:
+            print(f"Media metadata fetch failed ({media_id}): {meta_resp.status_code} {meta_resp.text[:200]}")
+            return None, None
+        meta = meta_resp.json() or {}
+        url = meta.get("url")
+        mime = meta.get("mime_type")
+        if not url:
+            return None, None
+
+        media_resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
+            timeout=30,
+        )
+        if media_resp.status_code != 200:
+            print(f"Media bytes fetch failed ({media_id}): {media_resp.status_code}")
+            return None, None
+        return media_resp.content, mime
+    except Exception as e:
+        print(f"Media fetch error ({media_id}): {e}")
+        return None, None
+
+
+def upload_media_to_storage(message_type, media_id, content, mime_type):
+    """Upload media bytes to Supabase Storage and return a public URL.
+
+    Tolerates "already exists" errors so retries (Shopify or WhatsApp
+    re-delivering the same webhook) don't blow up — we just reuse the
+    existing object.
+    """
+    if not content or not media_id:
+        return None
+    ext = _ext_for_mime(mime_type)
+    path = f"{message_type}/{media_id}{ext}"
+    try:
+        supabase.storage.from_(WHATSAPP_MEDIA_BUCKET).upload(
+            path=path,
+            file=content,
+            file_options={
+                "content-type": mime_type or "application/octet-stream",
+                "upsert": "true",
+            },
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if "already exists" not in msg and "duplicate" not in msg:
+            print(f"Storage upload error for {path}: {e}")
+    try:
+        return supabase.storage.from_(WHATSAPP_MEDIA_BUCKET).get_public_url(path)
+    except Exception as e:
+        print(f"Storage URL error for {path}: {e}")
+        return None
+
+
+# WhatsApp Cloud API error codes that indicate the recipient cannot
+# receive messages (most commonly because the number isn't on WhatsApp).
+# We flag the conversation so the UI can show a "Not on WhatsApp" tag.
+_NOT_ON_WHATSAPP_ERROR_CODES = {131026, 131049, 131050, 131000, 470}
 
 
 def get_customer_phone(order):
@@ -379,10 +469,23 @@ def log_outgoing_fulfillment_message(data, whatsapp_message_id):
     return conversation["id"]
 
 
+_MEDIA_TYPE_ICONS = {
+    "image": "📷 Image",
+    "audio": "🎤 Voice note",
+    "voice": "🎤 Voice note",
+    "video": "🎬 Video",
+    "document": "📎 Document",
+    "sticker": "🌟 Sticker",
+}
+
+
 def log_incoming_message(payload, message):
     phone = format_phone(message.get("from"))
     message_type = message.get("type")
     whatsapp_message_id = message.get("id")
+
+    media_url = None
+    media_mime = None
 
     if message_type == "text":
         body = message.get("text", {}).get("body", "")
@@ -396,6 +499,25 @@ def log_incoming_message(payload, message):
             body = interactive.get("list_reply", {}).get("title", "")
         else:
             body = "[interactive message received]"
+    elif message_type == "reaction":
+        reaction = message.get("reaction", {}) or {}
+        emoji = reaction.get("emoji", "")
+        body = emoji if emoji else "[reaction removed]"
+    elif message_type in ("image", "audio", "voice", "video", "document", "sticker"):
+        # Normalize legacy "voice" payloads into the "audio" bucket.
+        media_obj = message.get(message_type, {}) or {}
+        bucket_subdir = "audio" if message_type == "voice" else message_type
+        media_id = media_obj.get("id")
+        caption = (media_obj.get("caption") or "").strip()
+        filename = (media_obj.get("filename") or "").strip()
+
+        content, fetched_mime = fetch_whatsapp_media(media_id)
+        media_mime = fetched_mime or media_obj.get("mime_type")
+        if content:
+            media_url = upload_media_to_storage(bucket_subdir, media_id, content, media_mime)
+        # Body is the preview text shown in the conversation list. Prefer
+        # an actual caption / filename; fall back to a friendly icon.
+        body = caption or filename or _MEDIA_TYPE_ICONS.get(message_type, "📎 Attachment")
     else:
         body = f"[{message_type} message received]"
 
@@ -408,28 +530,36 @@ def log_incoming_message(payload, message):
         "direction": "incoming",
         "type": message_type,
         "body": body,
+        "media_url": media_url,
+        "media_mime_type": media_mime,
         "status": "received",
         "raw_payload": payload,
     }).execute()
 
     unread_count = conversation.get("unread_count") or 0
 
-    # Detect cancellation intent from button replies or short messages.
-    # Errs on the side of catching cancel-button taps reliably; we don't
-    # flip the flag on questions like "can I cancel later?".
+    # Cancel detection: aggressive on button replies (always short and the
+    # customer's literal tap), conservative on free text so that questions
+    # like "can I cancel later?" don't accidentally flip the flag.
     normalized = (body or "").strip().lower()
-    is_cancel_intent = (
-        normalized in {"cancel", "cancel order", "cancel my order", "no cancel"}
-        or normalized.startswith("cancel ")
-        or normalized.startswith("please cancel")
-        or normalized.startswith("plz cancel")
-    )
+    if message_type in ("button", "interactive"):
+        is_cancel_intent = "cancel" in normalized
+    else:
+        is_cancel_intent = (
+            normalized in {"cancel", "cancel order", "cancel my order", "no cancel"}
+            or normalized.startswith("cancel ")
+            or normalized.startswith("please cancel")
+            or normalized.startswith("plz cancel")
+        )
 
     update_payload = {
         "last_message": body,
         "last_message_at": "now()",
         "last_customer_message_at": "now()",
         "unread_count": unread_count + 1,
+        # If the customer is messaging us, they ARE on WhatsApp -
+        # clear any stale "not on WhatsApp" flag from earlier sends.
+        "is_not_on_whatsapp": False,
         "updated_at": "now()",
     }
     if is_cancel_intent:
@@ -438,7 +568,7 @@ def log_incoming_message(payload, message):
     supabase.table("conversations").update(update_payload).eq("id", conversation["id"]).execute()
 
     print(
-        f"Incoming message logged in Supabase."
+        f"Incoming {message_type} logged."
         + (" Marked cancelled." if is_cancel_intent else "")
     )
 
@@ -466,7 +596,7 @@ def log_message_status(payload, status_event):
     for _ in range(6):
         message_result = (
             supabase.table("messages")
-            .select("id, status")
+            .select("id, status, conversation_id")
             .eq("whatsapp_message_id", whatsapp_message_id)
             .limit(1)
             .execute()
@@ -488,6 +618,24 @@ def log_message_status(payload, status_event):
             "status": status,
         }).eq("id", message["id"]).execute()
         print(f"Message status updated: {current_status or 'unknown'} -> {status}")
+
+    # Failed delivery — check if it's because the recipient isn't on WhatsApp,
+    # and if so flag the conversation so the inbox UI shows a clear tag.
+    if status == "failed":
+        errors = status_event.get("errors") or []
+        for err in errors:
+            code = err.get("code")
+            if code in _NOT_ON_WHATSAPP_ERROR_CODES:
+                conv_id = message.get("conversation_id")
+                if conv_id:
+                    try:
+                        supabase.table("conversations").update({
+                            "is_not_on_whatsapp": True,
+                        }).eq("id", conv_id).execute()
+                        print(f"Conversation {conv_id} flagged as not on WhatsApp (error code {code}).")
+                    except Exception as e:
+                        print(f"Could not flag conversation {conv_id}: {e}")
+                break
 
     try:
         supabase.table("message_status_events").insert({

@@ -121,6 +121,77 @@ function renderMessageText(text) {
   ))
 }
 
+// Heuristic: caption text we want to show next to a media attachment.
+// The backend stores a placeholder like '📷 Image' when there's no real
+// caption — skip those so we don't double-render an empty label.
+function realCaption(body) {
+  if (!body) return ''
+  const trimmed = body.trim()
+  const placeholders = [
+    '📷 Image',
+    '🎤 Voice note',
+    '🎬 Video',
+    '📎 Document',
+    '🌟 Sticker',
+    '📎 Attachment',
+  ]
+  return placeholders.includes(trimmed) ? '' : trimmed
+}
+
+function renderMessageBody(message) {
+  // Reactions get a big-emoji rendering so they read as a reaction, not a text.
+  if (message.type === 'reaction') {
+    return (
+      <div className="mb-reaction-block">
+        <span className="mb-reaction-label">Reacted</span>
+        <span className="mb-reaction-emoji">{message.body || '❌'}</span>
+      </div>
+    )
+  }
+
+  const url = message.media_url
+  const mime = (message.media_mime_type || '').toLowerCase()
+
+  if (url) {
+    if (mime.startsWith('image/')) {
+      const caption = realCaption(message.body)
+      return (
+        <div className="mb-media">
+          <a href={url} target="_blank" rel="noreferrer" className="mb-media-link">
+            <img src={url} alt={caption || 'image'} className="mb-image" loading="lazy" />
+          </a>
+          {caption && <div className="mb-caption">{renderMessageText(caption)}</div>}
+        </div>
+      )
+    }
+    if (mime.startsWith('audio/')) {
+      return (
+        <div className="mb-media">
+          <audio controls preload="metadata" src={url} className="mb-audio" />
+        </div>
+      )
+    }
+    if (mime.startsWith('video/')) {
+      const caption = realCaption(message.body)
+      return (
+        <div className="mb-media">
+          <video controls preload="metadata" src={url} className="mb-video" />
+          {caption && <div className="mb-caption">{renderMessageText(caption)}</div>}
+        </div>
+      )
+    }
+    // Documents and anything else — fall back to a download chip.
+    return (
+      <a href={url} target="_blank" rel="noreferrer" className="mb-attachment">
+        <span className="mb-attachment-icon" aria-hidden>📎</span>
+        <span className="mb-attachment-label">{realCaption(message.body) || 'Download attachment'}</span>
+      </a>
+    )
+  }
+
+  return <div className="mb-text">{renderMessageText(message.body)}</div>
+}
+
 export default function MessageBubbles({ messages }) {
   let lastDateKey = null
   let lastDirection = null
@@ -135,6 +206,9 @@ export default function MessageBubbles({ messages }) {
         lastDateKey = currentKey
         lastDirection = message.direction
 
+        const hasMedia = !!message.media_url
+        const isReaction = message.type === 'reaction'
+
         return (
           <Fragment key={message.id}>
             {showDate && (
@@ -147,7 +221,9 @@ export default function MessageBubbles({ messages }) {
               <div
                 className={`mb-bubble ${isOutgoing ? 'out' : 'in'} ${
                   isFirstOfGroup ? 'has-tail' : ''
-                } ${message.status || ''} ${message.type === 'template' ? 'is-template' : ''}`}
+                } ${message.status || ''} ${message.type === 'template' ? 'is-template' : ''} ${
+                  hasMedia ? 'has-media' : ''
+                } ${isReaction ? 'is-reaction' : ''}`}
               >
                 {message.type === 'template' && (
                   <div className="mb-template-label">
@@ -158,7 +234,7 @@ export default function MessageBubbles({ messages }) {
                   </div>
                 )}
 
-                <div className="mb-text">{renderMessageText(message.body)}</div>
+                {renderMessageBody(message)}
 
                 <div className="mb-meta">
                   <span className="mb-time">{formatTime(message.created_at)}</span>

@@ -69,6 +69,9 @@ function statusTagFor(conversation) {
   if (conversation.is_cancelled) {
     return { label: 'Cancelled', className: 'cl-tag-cancelled' }
   }
+  if (conversation.is_not_on_whatsapp) {
+    return { label: 'Not on WhatsApp', className: 'cl-tag-notwa' }
+  }
   if (conversation.last_template === 'fulfilled') {
     return { label: 'Fulfilled', className: 'cl-tag-fulfilled' }
   }
