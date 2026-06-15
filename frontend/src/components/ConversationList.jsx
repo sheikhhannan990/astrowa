@@ -72,13 +72,18 @@ function statusTagFor(conversation) {
   if (conversation.is_not_on_whatsapp) {
     return { label: 'Not on WhatsApp', className: 'cl-tag-notwa' }
   }
-  if (conversation.last_template === 'fulfilled') {
-    return { label: 'Fulfilled', className: 'cl-tag-fulfilled' }
+  switch (conversation.last_template) {
+    case 'fulfilled':
+      return { label: 'Fulfilled', className: 'cl-tag-fulfilled' }
+    case 'confirmed':
+      return { label: 'Confirmed', className: 'cl-tag-confirmed' }
+    case 'bank_pending':
+      return { label: 'Bank Pending', className: 'cl-tag-bank-pending' }
+    case 'confirmation':
+      return { label: 'Confirmation', className: 'cl-tag-confirmation' }
+    default:
+      return null
   }
-  if (conversation.last_template === 'confirmation') {
-    return { label: 'Confirmation', className: 'cl-tag-confirmation' }
-  }
-  return null
 }
 
 export default function ConversationList({

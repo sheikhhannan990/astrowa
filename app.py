@@ -24,8 +24,16 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 TEMPLATE_NAME = os.getenv("WHATSAPP_TEMPLATE_NAME")
 FULFILLMENT_TEMPLATE_NAME = os.getenv("WHATSAPP_FULFILLMENT_TEMPLATE_NAME")
+BANK_DEPOSIT_TEMPLATE_NAME = (os.getenv("WHATSAPP_BANK_DEPOSIT_TEMPLATE_NAME") or "").strip()
 TEMPLATE_LANGUAGE = os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "en")
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
+
+# Optional: Bank account details rendered into the inbox copy of bank-deposit
+# messages so the merchant sees the same thing the customer saw. The customer
+# always sees the bank details that are baked into the approved Meta template.
+# Convert literal \n (which python-dotenv passes through verbatim) into real
+# newlines so the inbox renders the details on multiple lines.
+BANK_DETAILS_TEXT = (os.getenv("BANK_DETAILS_TEXT") or "").strip().replace("\\n", "\n")
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "").strip()
 
@@ -87,8 +95,10 @@ def format_phone(phone):
 
 # Stable tags written to conversations.last_template so the frontend
 # can render a status pill without needing to know template names.
-TEMPLATE_TAG_CONFIRMATION = "confirmation"
-TEMPLATE_TAG_FULFILLED = "fulfilled"
+TEMPLATE_TAG_CONFIRMATION = "confirmation"   # COD template sent, awaiting customer
+TEMPLATE_TAG_BANK_PENDING = "bank_pending"   # Bank deposit template sent, awaiting payment proof
+TEMPLATE_TAG_CONFIRMED = "confirmed"         # Customer tapped Confirm Order
+TEMPLATE_TAG_FULFILLED = "fulfilled"         # Order shipped
 
 # Supabase Storage bucket where incoming WhatsApp media (images, audio,
 # video, documents, stickers) gets uploaded. Bucket must exist and be
@@ -294,6 +304,25 @@ def send_whatsapp_confirmation(data):
     )
 
 
+def send_whatsapp_bank_deposit(data):
+    """Send the bank-deposit variant of the order confirmation template.
+
+    The template should expect the same 4 variables as the COD template
+    (name, order, items, total) so a single payload shape works for both.
+    Bank account details live as static text inside the approved template.
+    """
+    return _send_template(
+        BANK_DEPOSIT_TEMPLATE_NAME,
+        data["customer_phone"],
+        [
+            data["customer_name"],
+            data["order_number"],
+            data["products_text"],
+            str(data["total_price"]),
+        ],
+    )
+
+
 def send_whatsapp_fulfillment(data):
     return _send_template(
         FULFILLMENT_TEMPLATE_NAME,
@@ -305,6 +334,57 @@ def send_whatsapp_fulfillment(data):
             data["tracking_number"],
         ],
     )
+
+
+def send_whatsapp_text(to, body):
+    """Send a free-form WhatsApp text. Only allowed inside the 24-hour
+    customer-service window (i.e. after the customer messaged us).
+    Returns the WhatsApp message id, or None if the send failed."""
+    if not to or not body:
+        return None
+    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": format_phone(to),
+        "type": "text",
+        "text": {"body": body},
+    }
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+    except Exception as e:
+        print(f"send_whatsapp_text error: {e}")
+        return None
+    print(f"===== WHATSAPP TEXT REPLY -> {to} =====")
+    print(response.status_code, response.text[:300])
+    if response.status_code in [200, 201]:
+        return response.json().get("messages", [{}])[0].get("id")
+    return None
+
+
+_BANK_GATEWAY_HINTS = ("bank", "deposit", "transfer")
+
+
+def is_bank_deposit_order(order):
+    """True if the customer chose a bank-deposit / bank-transfer gateway."""
+    candidates = []
+    gateways = order.get("payment_gateway_names")
+    if isinstance(gateways, list):
+        candidates.extend(gateways)
+    elif isinstance(gateways, str):
+        candidates.append(gateways)
+    if order.get("gateway"):
+        candidates.append(order.get("gateway"))
+    for g in candidates:
+        if not g:
+            continue
+        gl = g.lower()
+        if any(h in gl for h in _BANK_GATEWAY_HINTS):
+            return True
+    return False
 
 
 # =========================
@@ -416,6 +496,96 @@ def log_outgoing_order_message(data, whatsapp_message_id):
 
     print(f"Outgoing confirmation logged in Supabase.")
     return conversation["id"]
+
+
+def log_outgoing_bank_deposit_message(data, whatsapp_message_id):
+    phone = format_phone(data["customer_phone"])
+
+    customer = get_or_create_customer(name=data["customer_name"], phone=phone)
+    conversation = get_or_create_conversation(
+        customer=customer,
+        phone=phone,
+        customer_name=data["customer_name"],
+        order_id=data["order_number"],
+    )
+
+    bank_section = BANK_DETAILS_TEXT or "(Bank details are shown to the customer inside the WhatsApp template.)"
+
+    message_body = (
+        f"Hi {data['customer_name']} 👋\n\n"
+        f"Thank you for shopping with AstroLamps ✨\n\n"
+        f"We've received your order via Bank Deposit. To complete it, please transfer the amount and share a screenshot of the receipt.\n\n"
+        f"📦 Order Summary\n"
+        f"Order ID: {data['order_number']}\n"
+        f"Items: {data['products_text']}\n"
+        f"Total Amount: Rs. {data['total_price']}\n\n"
+        f"🏦 Bank Details\n"
+        f"{bank_section}\n\n"
+        f"📸 Once paid, please send the payment screenshot here so we can dispatch your order."
+    )
+
+    preview_body = (
+        f"Bank Deposit | Order {data['order_number']} | "
+        f"Rs. {data['total_price']}"
+    )
+
+    supabase.table("messages").insert({
+        "conversation_id": conversation["id"],
+        "whatsapp_message_id": whatsapp_message_id,
+        "direction": "outgoing",
+        "type": "template",
+        "body": message_body,
+        "template_name": BANK_DEPOSIT_TEMPLATE_NAME,
+        "status": "sent",
+        "raw_payload": data,
+    }).execute()
+
+    supabase.table("conversations").update({
+        "last_message": preview_body,
+        "last_message_at": "now()",
+        "last_template": TEMPLATE_TAG_BANK_PENDING,
+        "is_cancelled": False,
+        "updated_at": "now()",
+    }).eq("id", conversation["id"]).execute()
+
+    print("Outgoing bank-deposit message logged in Supabase.")
+    return conversation["id"]
+
+
+# Auto-reply sent right after the customer taps the "Confirm Order"
+# button on the COD confirmation template. Free-form text is valid here
+# because the customer's tap opened a fresh 24-hour service window.
+CONFIRM_AUTO_REPLY_BODY = (
+    "Thank you for confirming your order ✨\n\n"
+    "We're getting it ready now and you'll receive a dispatch update from us shortly 📦\n\n"
+    "— Team AstroLamps"
+)
+
+
+def send_confirm_auto_reply(conversation, phone):
+    """Send the post-Confirm thank-you text and log it as outgoing."""
+    message_id = send_whatsapp_text(phone, CONFIRM_AUTO_REPLY_BODY)
+    if not message_id:
+        print("Confirm auto-reply send failed; nothing logged.")
+        return
+    try:
+        supabase.table("messages").insert({
+            "conversation_id": conversation["id"],
+            "whatsapp_message_id": message_id,
+            "direction": "outgoing",
+            "type": "text",
+            "body": CONFIRM_AUTO_REPLY_BODY,
+            "status": "sent",
+            "raw_payload": {"auto_reply": "confirm"},
+        }).execute()
+        supabase.table("conversations").update({
+            "last_message": "Thank you for confirming your order ✨",
+            "last_message_at": "now()",
+            "updated_at": "now()",
+        }).eq("id", conversation["id"]).execute()
+        print("Confirm auto-reply sent and logged.")
+    except Exception as e:
+        print(f"Confirm auto-reply log error: {e}")
 
 
 def log_outgoing_fulfillment_message(data, whatsapp_message_id):
@@ -538,12 +708,14 @@ def log_incoming_message(payload, message):
 
     unread_count = conversation.get("unread_count") or 0
 
-    # Cancel detection: aggressive on button replies (always short and the
-    # customer's literal tap), conservative on free text so that questions
-    # like "can I cancel later?" don't accidentally flip the flag.
+    # Intent detection on button replies (always short and the customer's
+    # literal tap) is aggressive; on free text we stay conservative so that
+    # questions like "can I cancel later?" don't flip the flag.
     normalized = (body or "").strip().lower()
-    if message_type in ("button", "interactive"):
+    is_button_tap = message_type in ("button", "interactive")
+    if is_button_tap:
         is_cancel_intent = "cancel" in normalized
+        is_confirm_intent = (not is_cancel_intent) and "confirm" in normalized
     else:
         is_cancel_intent = (
             normalized in {"cancel", "cancel order", "cancel my order", "no cancel"}
@@ -551,6 +723,7 @@ def log_incoming_message(payload, message):
             or normalized.startswith("please cancel")
             or normalized.startswith("plz cancel")
         )
+        is_confirm_intent = False
 
     update_payload = {
         "last_message": body,
@@ -565,11 +738,33 @@ def log_incoming_message(payload, message):
     if is_cancel_intent:
         update_payload["is_cancelled"] = True
 
+    # Decide whether to auto-reply BEFORE we update the row (the snapshot
+    # `conversation` is what we had before this incoming message arrived).
+    prior_template = (conversation.get("last_template") or "").strip().lower()
+    should_auto_reply = (
+        is_confirm_intent
+        and prior_template not in {
+            TEMPLATE_TAG_CONFIRMED,
+            TEMPLATE_TAG_FULFILLED,
+            TEMPLATE_TAG_BANK_PENDING,  # bank deposits need manual payment verification
+        }
+    )
+    if should_auto_reply:
+        # Customer just acknowledged a COD confirmation template — graduate
+        # the conversation to the 'confirmed' tag so it stops showing up
+        # under the "Confirmation" filter as something needing attention.
+        update_payload["last_template"] = TEMPLATE_TAG_CONFIRMED
+        update_payload["is_cancelled"] = False
+
     supabase.table("conversations").update(update_payload).eq("id", conversation["id"]).execute()
+
+    if should_auto_reply:
+        send_confirm_auto_reply(conversation, phone)
 
     print(
         f"Incoming {message_type} logged."
         + (" Marked cancelled." if is_cancel_intent else "")
+        + (" Auto-replied to confirm." if should_auto_reply else "")
     )
 
 
@@ -662,9 +857,16 @@ def order_created():
     phone = format_phone(extracted["customer_phone"]) if extracted["customer_phone"] else ""
     order_key = f"create:{shopify_order_id or extracted['order_number']}:{phone}"
 
+    # Pick which template to send based on the chosen payment method.
+    # Bank Deposit gets the bank-details template (if configured); everything
+    # else falls back to the regular order-confirmation template.
+    use_bank_template = bool(BANK_DEPOSIT_TEMPLATE_NAME) and is_bank_deposit_order(order)
+    gateways_dbg = order.get("payment_gateway_names") or order.get("gateway")
+
     print("\n===== NEW SHOPIFY ORDER =====")
     print(json.dumps(extracted, indent=2, ensure_ascii=False))
     print(f"X-Shopify-Webhook-Id: {webhook_id}")
+    print(f"Payment gateway: {gateways_dbg} | bank_deposit_path={use_bank_template}")
 
     with _DEDUP_LOCK:
         if webhook_id and webhook_id in _PROCESSED_WEBHOOK_IDS:
@@ -690,13 +892,14 @@ def order_created():
     )
 
     if existing_conversation.data:
-        # Conversation exists, but only block the confirmation send if we
-        # actually already sent a confirmation template for this order.
+        # Conversation exists; block the send if we already sent *any*
+        # confirmation-class template (COD or Bank Deposit) for this order.
+        candidate_templates = [t for t in (TEMPLATE_NAME, BANK_DEPOSIT_TEMPLATE_NAME) if t]
         already_sent = (
             supabase.table("messages")
             .select("id")
             .eq("conversation_id", existing_conversation.data[0]["id"])
-            .eq("template_name", TEMPLATE_NAME)
+            .in_("template_name", candidate_templates)
             .limit(1)
             .execute()
         )
@@ -704,12 +907,18 @@ def order_created():
             print("Confirmation already sent for this order. Skipping.")
             return "Duplicate ignored", 200
 
-    whatsapp_message_id = send_whatsapp_confirmation(extracted)
-
-    if whatsapp_message_id:
-        log_outgoing_order_message(extracted, whatsapp_message_id)
+    if use_bank_template:
+        whatsapp_message_id = send_whatsapp_bank_deposit(extracted)
+        if whatsapp_message_id:
+            log_outgoing_bank_deposit_message(extracted, whatsapp_message_id)
+        else:
+            print("WhatsApp bank-deposit template failed. Not logged as outgoing message.")
     else:
-        print("WhatsApp confirmation failed. Not logged as outgoing message.")
+        whatsapp_message_id = send_whatsapp_confirmation(extracted)
+        if whatsapp_message_id:
+            log_outgoing_order_message(extracted, whatsapp_message_id)
+        else:
+            print("WhatsApp confirmation failed. Not logged as outgoing message.")
 
     return "OK", 200
 
@@ -905,8 +1114,10 @@ def home():
         "app": "AstroLamps WhatsApp Inbox Backend",
         "templates": {
             "order_confirmation": TEMPLATE_NAME,
+            "bank_deposit": BANK_DEPOSIT_TEMPLATE_NAME or "(not configured)",
             "order_dispatched": FULFILLMENT_TEMPLATE_NAME,
         },
+        "bank_details_configured": bool(BANK_DETAILS_TEXT),
     }), 200
 
 

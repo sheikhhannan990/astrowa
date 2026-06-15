@@ -79,6 +79,12 @@ export default function App() {
   const selectedConversation =
     conversations.find((c) => c.id === selectedConversationId) || null
 
+  // 'confirmation' filter is a catch-all for everything still awaiting the
+  // customer's action — both the COD "Confirmation" tag and the
+  // "Bank Pending" tag (where we're waiting for a payment screenshot).
+  const isAwaitingConfirmation = (c) =>
+    c.last_template === 'confirmation' || c.last_template === 'bank_pending'
+
   // Counts driven by the unfiltered list so the pill badges always reflect
   // reality even when the user is mid-search.
   const counts = conversations.reduce(
@@ -87,7 +93,7 @@ export default function App() {
       else {
         acc.all += 1
         if ((c.unread_count || 0) > 0) acc.unread += 1
-        if (c.last_template === 'confirmation') acc.confirmation += 1
+        if (isAwaitingConfirmation(c)) acc.confirmation += 1
         else if (c.last_template === 'fulfilled') acc.fulfilled += 1
       }
       return acc
@@ -101,7 +107,7 @@ export default function App() {
     } else {
       if (conv.is_cancelled) return false
       if (filter === 'unread' && !((conv.unread_count || 0) > 0)) return false
-      if (filter === 'confirmation' && conv.last_template !== 'confirmation') return false
+      if (filter === 'confirmation' && !isAwaitingConfirmation(conv)) return false
       if (filter === 'fulfilled' && conv.last_template !== 'fulfilled') return false
     }
 

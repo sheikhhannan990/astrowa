@@ -323,6 +323,16 @@
   color: #4b5563;
 }
 
+.cl-tag-confirmed {
+  background-color: rgba(34, 197, 94, 0.18);
+  color: #15803d;
+}
+
+.cl-tag-bank-pending {
+  background-color: rgba(168, 85, 247, 0.18);
+  color: #7c3aed;
+}
+
 .cl-item.is-cancelled .cl-name,
 .cl-item.is-cancelled .cl-preview {
   color: var(--wa-text-muted);
