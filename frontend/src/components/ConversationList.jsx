@@ -57,6 +57,26 @@ function formatPhone(phone) {
   return phone.replace(/(\d{2})(\d{3})(\d{7})/, '+$1 $2 $3')
 }
 
+const FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'confirmation', label: 'Confirmation' },
+  { id: 'fulfilled', label: 'Fulfilled' },
+  { id: 'cancelled', label: 'Cancelled' },
+]
+
+function statusTagFor(conversation) {
+  if (conversation.is_cancelled) {
+    return { label: 'Cancelled', className: 'cl-tag-cancelled' }
+  }
+  if (conversation.last_template === 'fulfilled') {
+    return { label: 'Fulfilled', className: 'cl-tag-fulfilled' }
+  }
+  if (conversation.last_template === 'confirmation') {
+    return { label: 'Confirmation', className: 'cl-tag-confirmation' }
+  }
+  return null
+}
+
 export default function ConversationList({
   conversations,
   selectedConversation,
@@ -65,7 +85,18 @@ export default function ConversationList({
   error,
   searchTerm,
   onSearchChange,
+  filter,
+  onFilterChange,
+  counts,
 }) {
+  const emptyMessage = (() => {
+    if (searchTerm) return 'No matches found'
+    if (filter === 'cancelled') return 'No cancelled conversations'
+    if (filter === 'confirmation') return 'No conversations awaiting confirmation'
+    if (filter === 'fulfilled') return 'No fulfilled conversations'
+    return 'No conversations yet'
+  })()
+
   return (
     <div className="conversation-list">
       {/* Top bar */}
@@ -77,20 +108,6 @@ export default function ConversationList({
             </svg>
           </div>
           <h1>AstroLamps WA</h1>
-        </div>
-        <div className="cl-actions" aria-hidden>
-          <button className="cl-icon-btn" title="New chat">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="#54656f">
-              <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
-            </svg>
-          </button>
-          <button className="cl-icon-btn" title="Menu">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="#54656f">
-              <circle cx="12" cy="5" r="2" />
-              <circle cx="12" cy="12" r="2" />
-              <circle cx="12" cy="19" r="2" />
-            </svg>
-          </button>
         </div>
       </header>
 
@@ -110,6 +127,27 @@ export default function ConversationList({
         </div>
       </div>
 
+      {/* Filter pills */}
+      <div className="cl-filters" role="tablist" aria-label="Conversation filters">
+        {FILTERS.map((f) => {
+          const isActive = filter === f.id
+          const count = counts?.[f.id] ?? 0
+          return (
+            <button
+              key={f.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              className={`cl-filter ${isActive ? 'is-active' : ''} cl-filter-${f.id}`}
+              onClick={() => onFilterChange(f.id)}
+            >
+              <span className="cl-filter-label">{f.label}</span>
+              {count > 0 && <span className="cl-filter-count">{count}</span>}
+            </button>
+          )
+        })}
+      </div>
+
       {/* List */}
       <div className="cl-items">
         {loading ? (
@@ -117,20 +155,19 @@ export default function ConversationList({
         ) : error ? (
           <div className="cl-status cl-status-error">Error: {error}</div>
         ) : conversations.length === 0 ? (
-          <div className="cl-status">
-            {searchTerm ? 'No matches found' : 'No conversations yet'}
-          </div>
+          <div className="cl-status">{emptyMessage}</div>
         ) : (
           conversations.map((conversation) => {
             const isActive = selectedConversation?.id === conversation.id
             const hasUnread = (conversation.unread_count || 0) > 0
             const [g1, g2] = gradientFor(conversation.customer_name || conversation.phone)
             const initial = (conversation.customer_name || 'C')[0].toUpperCase()
+            const tag = statusTagFor(conversation)
             return (
               <button
                 type="button"
                 key={conversation.id}
-                className={`cl-item ${isActive ? 'is-active' : ''}`}
+                className={`cl-item ${isActive ? 'is-active' : ''} ${conversation.is_cancelled ? 'is-cancelled' : ''}`}
                 onClick={() => onSelectConversation(conversation)}
               >
                 <div
@@ -158,6 +195,9 @@ export default function ConversationList({
                       <span className="cl-order" title={`Order ${conversation.order_id}`}>
                         {conversation.order_id}
                       </span>
+                    )}
+                    {tag && (
+                      <span className={`cl-tag ${tag.className}`}>{tag.label}</span>
                     )}
                   </div>
 

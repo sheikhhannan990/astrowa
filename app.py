@@ -65,12 +65,29 @@ def _remember(cache, key):
 # =========================
 
 def format_phone(phone):
-    phone = str(phone or "").replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-    if phone.startswith("+"):
-        phone = phone[1:]
-    if phone.startswith("0"):
-        phone = "92" + phone[1:]
-    return phone
+    """Normalize a phone number to E.164-ish form without the leading +.
+
+    Tuned for Pakistan (country code 92). Handles all common formats so
+    Shopify + WhatsApp + manual entries land on the same canonical key:
+        03001234567        -> 923001234567
+        +92 300 1234567    -> 923001234567
+        923001234567       -> 923001234567
+        3001234567         -> 923001234567   (10-digit local, no leading 0)
+    """
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    if not digits:
+        return ""
+    if digits.startswith("0"):
+        digits = "92" + digits[1:]
+    elif not digits.startswith("92") and len(digits) == 10:
+        digits = "92" + digits
+    return digits
+
+
+# Stable tags written to conversations.last_template so the frontend
+# can render a status pill without needing to know template names.
+TEMPLATE_TAG_CONFIRMATION = "confirmation"
+TEMPLATE_TAG_FULFILLED = "fulfilled"
 
 
 def get_customer_phone(order):
@@ -302,6 +319,8 @@ def log_outgoing_order_message(data, whatsapp_message_id):
     supabase.table("conversations").update({
         "last_message": preview_body,
         "last_message_at": "now()",
+        "last_template": TEMPLATE_TAG_CONFIRMATION,
+        "is_cancelled": False,
         "updated_at": "now()",
     }).eq("id", conversation["id"]).execute()
 
@@ -351,6 +370,8 @@ def log_outgoing_fulfillment_message(data, whatsapp_message_id):
     supabase.table("conversations").update({
         "last_message": preview_body,
         "last_message_at": "now()",
+        "last_template": TEMPLATE_TAG_FULFILLED,
+        "is_cancelled": False,
         "updated_at": "now()",
     }).eq("id", conversation["id"]).execute()
 
@@ -393,15 +414,33 @@ def log_incoming_message(payload, message):
 
     unread_count = conversation.get("unread_count") or 0
 
-    supabase.table("conversations").update({
+    # Detect cancellation intent from button replies or short messages.
+    # Errs on the side of catching cancel-button taps reliably; we don't
+    # flip the flag on questions like "can I cancel later?".
+    normalized = (body or "").strip().lower()
+    is_cancel_intent = (
+        normalized in {"cancel", "cancel order", "cancel my order", "no cancel"}
+        or normalized.startswith("cancel ")
+        or normalized.startswith("please cancel")
+        or normalized.startswith("plz cancel")
+    )
+
+    update_payload = {
         "last_message": body,
         "last_message_at": "now()",
         "last_customer_message_at": "now()",
         "unread_count": unread_count + 1,
         "updated_at": "now()",
-    }).eq("id", conversation["id"]).execute()
+    }
+    if is_cancel_intent:
+        update_payload["is_cancelled"] = True
 
-    print(f"Incoming message logged in Supabase.")
+    supabase.table("conversations").update(update_payload).eq("id", conversation["id"]).execute()
+
+    print(
+        f"Incoming message logged in Supabase."
+        + (" Marked cancelled." if is_cancel_intent else "")
+    )
 
 
 # Status ordering so a late 'delivered' webhook can't downgrade a 'read'.

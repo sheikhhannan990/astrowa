@@ -10,6 +10,9 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
+  // Filter pills: 'all' | 'confirmation' | 'fulfilled' | 'cancelled'.
+  // 'all' excludes cancelled chats (archive-style); 'cancelled' shows only them.
+  const [filter, setFilter] = useState('all')
   const [isMobileView, setIsMobileView] = useState(
     typeof window !== 'undefined' && window.innerWidth < 900
   )
@@ -76,7 +79,31 @@ export default function App() {
   const selectedConversation =
     conversations.find((c) => c.id === selectedConversationId) || null
 
+  // Counts driven by the unfiltered list so the pill badges always reflect
+  // reality even when the user is mid-search.
+  const counts = conversations.reduce(
+    (acc, c) => {
+      if (c.is_cancelled) acc.cancelled += 1
+      else {
+        acc.all += 1
+        if (c.last_template === 'confirmation') acc.confirmation += 1
+        else if (c.last_template === 'fulfilled') acc.fulfilled += 1
+      }
+      return acc
+    },
+    { all: 0, confirmation: 0, fulfilled: 0, cancelled: 0 }
+  )
+
   const filteredConversations = conversations.filter((conv) => {
+    if (filter === 'cancelled') {
+      if (!conv.is_cancelled) return false
+    } else {
+      if (conv.is_cancelled) return false
+      if (filter === 'confirmation' && conv.last_template !== 'confirmation') return false
+      if (filter === 'fulfilled' && conv.last_template !== 'fulfilled') return false
+    }
+
+    if (!searchTerm) return true
     const searchLower = searchTerm.toLowerCase()
     return (
       (conv.customer_name && conv.customer_name.toLowerCase().includes(searchLower)) ||
@@ -94,6 +121,9 @@ export default function App() {
       error={error}
       searchTerm={searchTerm}
       onSearchChange={setSearchTerm}
+      filter={filter}
+      onFilterChange={setFilter}
+      counts={counts}
     />
   )
 
