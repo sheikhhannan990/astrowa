@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+import { setConversationStatus } from '../utils/api'
 import './ConversationList.css'
 
 const AVATAR_GRADIENTS = [
@@ -67,23 +69,42 @@ const FILTERS = [
 
 function statusTagFor(conversation) {
   if (conversation.is_cancelled) {
-    return { label: 'Cancelled', className: 'cl-tag-cancelled' }
+    return { label: 'Cancelled', className: 'cl-tag-cancelled', tag: 'cancelled' }
   }
   if (conversation.is_not_on_whatsapp) {
-    return { label: 'Not on WhatsApp', className: 'cl-tag-notwa' }
+    return { label: 'Not on WhatsApp', className: 'cl-tag-notwa', tag: 'notwa' }
   }
   switch (conversation.last_template) {
     case 'fulfilled':
-      return { label: 'Fulfilled', className: 'cl-tag-fulfilled' }
+      return { label: 'Fulfilled', className: 'cl-tag-fulfilled', tag: 'fulfilled' }
+    case 'paid':
+      return { label: 'Paid', className: 'cl-tag-paid', tag: 'paid' }
     case 'confirmed':
-      return { label: 'Confirmed', className: 'cl-tag-confirmed' }
+      return { label: 'Confirmed', className: 'cl-tag-confirmed', tag: 'confirmed' }
     case 'bank_pending':
-      return { label: 'Bank Pending', className: 'cl-tag-bank-pending' }
+      return { label: 'Bank Pending', className: 'cl-tag-bank-pending', tag: 'bank_pending' }
     case 'confirmation':
-      return { label: 'Confirmation', className: 'cl-tag-confirmation' }
+      return { label: 'Confirmation', className: 'cl-tag-confirmation', tag: 'confirmation' }
     default:
       return null
   }
+}
+
+// Tags the merchant can manually change from a dropdown next to the pill.
+// Map of currentTag -> array of { label, patch } actions presented in the menu.
+const TAG_ACTIONS = {
+  bank_pending: [
+    {
+      label: 'Mark as Payment Made',
+      patch: { last_template: 'paid' },
+    },
+  ],
+  paid: [
+    {
+      label: 'Revert to Bank Pending',
+      patch: { last_template: 'bank_pending' },
+    },
+  ],
 }
 
 export default function ConversationList({
@@ -98,6 +119,41 @@ export default function ConversationList({
   onFilterChange,
   counts,
 }) {
+  // Which conversation row currently has its tag-action dropdown open. We
+  // only allow one open at a time so it behaves like a typical menu.
+  const [openTagMenuId, setOpenTagMenuId] = useState(null)
+  const [pendingTagAction, setPendingTagAction] = useState(false)
+
+  // Close the menu on any outside click. Listener is registered after the
+  // open click finishes (useEffect timing) so it doesn't immediately fire.
+  useEffect(() => {
+    if (!openTagMenuId) return
+    const handler = () => setOpenTagMenuId(null)
+    document.addEventListener('click', handler)
+    return () => document.removeEventListener('click', handler)
+  }, [openTagMenuId])
+
+  const handleTagClick = (event, conversationId, hasActions) => {
+    event.stopPropagation()
+    if (!hasActions) return
+    setOpenTagMenuId(openTagMenuId === conversationId ? null : conversationId)
+  }
+
+  const handleTagAction = async (event, conversationId, patch) => {
+    event.stopPropagation()
+    setOpenTagMenuId(null)
+    if (pendingTagAction) return
+    setPendingTagAction(true)
+    try {
+      await setConversationStatus(conversationId, patch)
+      // Realtime subscription on conversations will refetch and rerender.
+    } catch (err) {
+      alert('Could not update status. ' + (err?.response?.data?.error || err.message))
+    } finally {
+      setPendingTagAction(false)
+    }
+  }
+
   const emptyMessage = (() => {
     if (searchTerm) return 'No matches found'
     if (filter === 'cancelled') return 'No cancelled conversations'
@@ -206,9 +262,48 @@ export default function ConversationList({
                         {conversation.order_id}
                       </span>
                     )}
-                    {tag && (
-                      <span className={`cl-tag ${tag.className}`}>{tag.label}</span>
-                    )}
+                    {tag && (() => {
+                      const actions = TAG_ACTIONS[tag.tag] || null
+                      const hasActions = !!actions && actions.length > 0
+                      const isMenuOpen = openTagMenuId === conversation.id
+                      return (
+                        <span className="cl-tag-wrap">
+                          <button
+                            type="button"
+                            className={`cl-tag ${tag.className} ${hasActions ? 'cl-tag-clickable' : ''}`}
+                            onClick={(e) => handleTagClick(e, conversation.id, hasActions)}
+                            title={hasActions ? 'Click to change status' : undefined}
+                          >
+                            {tag.label}
+                            {hasActions && (
+                              <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden>
+                                <path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                            )}
+                          </button>
+                          {hasActions && isMenuOpen && (
+                            <div
+                              className="cl-tag-menu"
+                              role="menu"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {actions.map((action) => (
+                                <button
+                                  key={action.label}
+                                  type="button"
+                                  role="menuitem"
+                                  className="cl-tag-menu-item"
+                                  disabled={pendingTagAction}
+                                  onClick={(e) => handleTagAction(e, conversation.id, action.patch)}
+                                >
+                                  {action.label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </span>
+                      )
+                    })()}
                   </div>
 
                   <div className="cl-row-bottom">

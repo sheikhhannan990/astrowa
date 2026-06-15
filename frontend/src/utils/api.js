@@ -27,4 +27,20 @@ export async function sendMessage(phone, message, conversationId) {
   }
 }
 
+// Manually override a conversation's status (used by the inbox dropdowns,
+// e.g. marking a Bank Pending order as Paid once the merchant has verified
+// the screenshot). Pass any subset of: { last_template, is_cancelled }.
+export async function setConversationStatus(conversationId, patch) {
+  try {
+    const response = await apiClient.post(
+      `/conversations/${conversationId}/set-status`,
+      patch,
+    )
+    return response.data
+  } catch (error) {
+    console.error('Failed to update conversation status:', error)
+    throw error
+  }
+}
+
 export default apiClient

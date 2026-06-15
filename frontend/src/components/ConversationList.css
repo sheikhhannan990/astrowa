@@ -333,6 +333,71 @@
   color: #7c3aed;
 }
 
+.cl-tag-paid {
+  background-color: rgba(13, 148, 136, 0.18);
+  color: #0d9488;
+}
+
+/* Tag dropdown (clickable status pill, e.g. Bank Pending) */
+.cl-tag-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.cl-tag {
+  /* base .cl-tag is a <button> when clickable; reset native styling */
+  border: none;
+  font: inherit;
+  cursor: default;
+}
+
+.cl-tag-clickable {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.cl-tag-clickable:hover {
+  filter: brightness(0.96);
+}
+
+.cl-tag-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 180px;
+  background-color: #ffffff;
+  border: 1px solid var(--wa-panel-border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(11, 20, 26, 0.18);
+  padding: 4px 0;
+  overflow: hidden;
+}
+
+.cl-tag-menu-item {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  background: none;
+  border: none;
+  text-align: left;
+  font-size: 13.5px;
+  color: var(--wa-text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cl-tag-menu-item:hover:not(:disabled) {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.cl-tag-menu-item:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 .cl-item.is-cancelled .cl-name,
 .cl-item.is-cancelled .cl-preview {
   color: var(--wa-text-muted);

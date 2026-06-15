@@ -98,7 +98,17 @@ def format_phone(phone):
 TEMPLATE_TAG_CONFIRMATION = "confirmation"   # COD template sent, awaiting customer
 TEMPLATE_TAG_BANK_PENDING = "bank_pending"   # Bank deposit template sent, awaiting payment proof
 TEMPLATE_TAG_CONFIRMED = "confirmed"         # Customer tapped Confirm Order
+TEMPLATE_TAG_PAID = "paid"                   # Merchant verified bank-deposit payment
 TEMPLATE_TAG_FULFILLED = "fulfilled"         # Order shipped
+
+# Tags the merchant is allowed to set manually from the UI. Webhook-driven
+# tags (confirmation / fulfilled / confirmed) are intentionally excluded so
+# the merchant can't accidentally rewind a Shopify-driven status.
+_MANUALLY_SETTABLE_TAGS = {
+    TEMPLATE_TAG_PAID,
+    TEMPLATE_TAG_BANK_PENDING,
+    None,  # allow clearing the tag
+}
 
 # Supabase Storage bucket where incoming WhatsApp media (images, audio,
 # video, documents, stickers) gets uploaded. Bucket must exist and be
@@ -1101,6 +1111,50 @@ def send_message():
         }), 200
 
     return jsonify({"success": False, "error": response.text}), 400
+
+
+# =========================
+# CONVERSATION STATUS (manual overrides from the inbox UI)
+# =========================
+
+@app.route("/conversations/<conversation_id>/set-status", methods=["POST", "OPTIONS"])
+def set_conversation_status(conversation_id):
+    """Let the merchant flip a conversation's tag from the inbox dropdown.
+
+    Body: { "last_template": "paid" | "bank_pending" | null,
+            "is_cancelled": true | false }   (each field optional)
+    """
+    if request.method == "OPTIONS":
+        return "", 204
+    data = request.get_json(silent=True) or {}
+
+    update = {"updated_at": "now()"}
+    if "last_template" in data:
+        new_tag = data.get("last_template")
+        if new_tag not in _MANUALLY_SETTABLE_TAGS:
+            return jsonify({"success": False, "error": f"tag '{new_tag}' is not manually settable"}), 400
+        update["last_template"] = new_tag
+        # Setting paid implicitly means the conversation is not cancelled.
+        if new_tag == TEMPLATE_TAG_PAID:
+            update["is_cancelled"] = False
+    if "is_cancelled" in data:
+        update["is_cancelled"] = bool(data["is_cancelled"])
+
+    try:
+        result = (
+            supabase.table("conversations")
+            .update(update)
+            .eq("id", conversation_id)
+            .execute()
+        )
+    except Exception as e:
+        print(f"set_conversation_status DB error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+    if not result.data:
+        return jsonify({"success": False, "error": "conversation not found"}), 404
+
+    return jsonify({"success": True, "conversation": result.data[0]}), 200
 
 
 # =========================
