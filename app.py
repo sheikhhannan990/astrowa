@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from datetime import datetime, timedelta, timezone
 import os
 import json
 import threading
@@ -24,18 +23,10 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 TEMPLATE_NAME = os.getenv("WHATSAPP_TEMPLATE_NAME")
 FULFILLMENT_TEMPLATE_NAME = os.getenv("WHATSAPP_FULFILLMENT_TEMPLATE_NAME")
-REMINDER_TEMPLATE_NAME = os.getenv("WHATSAPP_REMINDER_TEMPLATE_NAME")
 TEMPLATE_LANGUAGE = os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "en")
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "").strip()
-REMINDER_HOURS = int(os.getenv("REMINDER_HOURS", "20"))
-# Look back this many additional hours so a 30-min cron tick never misses a
-# confirmation that aged into the window between sweeps.
-REMINDER_WINDOW_HOURS = int(os.getenv("REMINDER_WINDOW_HOURS", "3"))
-# Secret shared with the external cron service (cron-job.org / GitHub Actions /
-# Upstash QStash). Required to call /internal/run-reminders.
-REMINDER_CRON_SECRET = os.getenv("REMINDER_CRON_SECRET", "").strip()
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
@@ -105,7 +96,16 @@ def _customer_name_from(order):
 def extract_order_data(order):
     products = []
     for item in order.get("line_items", []) or []:
-        products.append(f"{item.get('title')} x {item.get('quantity')}")
+        title = (item.get("title") or "").strip()
+        variant = (item.get("variant_title") or "").strip()
+        qty = item.get("quantity") or 1
+
+        # Shopify fills variant_title with "Default Title" for products that
+        # have no variants — we only want to surface meaningful variant names.
+        if variant and variant.lower() != "default title":
+            products.append(f"{title} ({variant}) x {qty}")
+        else:
+            products.append(f"{title} x {qty}")
 
     return {
         "customer_name": _customer_name_from(order),
@@ -196,18 +196,6 @@ def send_whatsapp_fulfillment(data):
             data["order_number"],
             data["tracking_company"],
             data["tracking_number"],
-        ],
-    )
-
-
-def send_whatsapp_reminder(data):
-    return _send_template(
-        REMINDER_TEMPLATE_NAME,
-        data["customer_phone"],
-        [
-            data["customer_name"],
-            data["order_number"],
-            str(data["total_price"]),
         ],
     )
 
@@ -368,38 +356,6 @@ def log_outgoing_fulfillment_message(data, whatsapp_message_id):
 
     print(f"Outgoing fulfillment logged in Supabase.")
     return conversation["id"]
-
-
-def log_outgoing_reminder_message(data, whatsapp_message_id, conversation_id):
-    message_body = (
-        f"Hi {data['customer_name']}, just checking in 👋\n\n"
-        f"We haven't received your confirmation for your AstroLamps order yet.\n\n"
-        f"📦 Order: {data['order_number']}\n"
-        f"💰 Total: Rs. {data['total_price']}\n\n"
-        f"Please confirm below so we can dispatch your order today. "
-        f"If we don't hear back, your order may be placed on hold."
-    )
-
-    preview_body = f"⏰ Reminder sent for order {data['order_number']}"
-
-    supabase.table("messages").insert({
-        "conversation_id": conversation_id,
-        "whatsapp_message_id": whatsapp_message_id,
-        "direction": "outgoing",
-        "type": "template",
-        "body": message_body,
-        "template_name": REMINDER_TEMPLATE_NAME,
-        "status": "sent",
-        "raw_payload": data,
-    }).execute()
-
-    supabase.table("conversations").update({
-        "last_message": preview_body,
-        "last_message_at": "now()",
-        "updated_at": "now()",
-    }).eq("id", conversation_id).execute()
-
-    print(f"Reminder logged in Supabase for conversation {conversation_id}.")
 
 
 def log_incoming_message(payload, message):
@@ -752,141 +708,6 @@ def send_message():
 
 
 # =========================
-# 20-HOUR REMINDER SCHEDULER
-# =========================
-
-def check_and_send_reminders():
-    """For confirmations sent REMINDER_HOURS-23h ago where the customer never replied
-    and no reminder has been sent yet, fire the order_reminder template.
-
-    Returns a small summary dict so the /internal/run-reminders endpoint can
-    surface it in the cron job's response body (useful for cron-job.org logs).
-    """
-    summary = {"candidates": 0, "sent": 0, "skipped": 0, "errors": 0}
-
-    if not (TEMPLATE_NAME and REMINDER_TEMPLATE_NAME):
-        print("[Reminder] Template names not configured — skipping sweep.")
-        return summary
-
-    now = datetime.now(timezone.utc)
-    upper_bound = (now - timedelta(hours=REMINDER_HOURS)).isoformat()
-    lower_bound = (now - timedelta(hours=REMINDER_HOURS + REMINDER_WINDOW_HOURS)).isoformat()
-
-    print(
-        f"\n[Reminder] Sweep at {now.isoformat()} "
-        f"(confirmations between {lower_bound} and {upper_bound})"
-    )
-
-    try:
-        confirmations = (
-            supabase.table("messages")
-            .select("id, conversation_id, created_at, raw_payload")
-            .eq("direction", "outgoing")
-            .eq("type", "template")
-            .eq("template_name", TEMPLATE_NAME)
-            .gte("created_at", lower_bound)
-            .lte("created_at", upper_bound)
-            .execute()
-        )
-    except Exception as e:
-        print(f"[Reminder] Failed to query confirmations: {e}")
-        summary["errors"] += 1
-        return summary
-
-    candidates = confirmations.data or []
-    summary["candidates"] = len(candidates)
-
-    for msg in candidates:
-        conv_id = msg["conversation_id"]
-        confirmation_sent_at = msg["created_at"]
-
-        try:
-            conv_res = (
-                supabase.table("conversations")
-                .select("*")
-                .eq("id", conv_id)
-                .limit(1)
-                .execute()
-            )
-            if not conv_res.data:
-                continue
-            conv = conv_res.data[0]
-
-            last_customer = conv.get("last_customer_message_at")
-            if last_customer and last_customer > confirmation_sent_at:
-                summary["skipped"] += 1
-                continue
-
-            existing_reminder = (
-                supabase.table("messages")
-                .select("id")
-                .eq("conversation_id", conv_id)
-                .eq("template_name", REMINDER_TEMPLATE_NAME)
-                .limit(1)
-                .execute()
-            )
-            if existing_reminder.data:
-                summary["skipped"] += 1
-                continue
-
-            raw = msg.get("raw_payload") or {}
-            reminder_data = {
-                "customer_name": conv.get("customer_name") or raw.get("customer_name") or "Customer",
-                "customer_phone": conv.get("phone"),
-                "order_number": conv.get("order_id") or raw.get("order_number"),
-                "total_price": raw.get("total_price") or "—",
-            }
-
-            wid = send_whatsapp_reminder(reminder_data)
-            if wid:
-                log_outgoing_reminder_message(reminder_data, wid, conv_id)
-                summary["sent"] += 1
-                print(
-                    f"[Reminder] Sent for conversation {conv_id} "
-                    f"(order {reminder_data['order_number']})"
-                )
-            else:
-                summary["errors"] += 1
-                print(f"[Reminder] Failed to send for conversation {conv_id}")
-        except Exception as e:
-            summary["errors"] += 1
-            print(f"[Reminder] Error processing conversation {conv_id}: {e}")
-
-    print(
-        f"[Reminder] Done. Candidates: {summary['candidates']}, "
-        f"Sent: {summary['sent']}, Skipped: {summary['skipped']}, Errors: {summary['errors']}"
-    )
-    return summary
-
-
-@app.route("/internal/run-reminders", methods=["GET", "POST"])
-def run_reminders_endpoint():
-    """Triggered by an external cron service (cron-job.org etc.) every ~30 min.
-
-    Protected by REMINDER_CRON_SECRET, which the caller must supply via any of:
-      - Header: X-Cron-Secret: <secret>
-      - Header: Authorization: Bearer <secret>
-      - Query string: ?token=<secret>
-    """
-    if not REMINDER_CRON_SECRET:
-        return jsonify({
-            "error": "Endpoint disabled — set REMINDER_CRON_SECRET in env",
-        }), 503
-
-    provided = (
-        request.headers.get("X-Cron-Secret")
-        or (request.headers.get("Authorization") or "").replace("Bearer ", "").strip()
-        or request.args.get("token", "")
-    )
-
-    if provided != REMINDER_CRON_SECRET:
-        return jsonify({"error": "Forbidden"}), 403
-
-    result = check_and_send_reminders()
-    return jsonify({"status": "ok", **(result or {})}), 200
-
-
-# =========================
 # HEALTH CHECK
 # =========================
 
@@ -898,9 +719,7 @@ def home():
         "templates": {
             "order_confirmation": TEMPLATE_NAME,
             "order_dispatched": FULFILLMENT_TEMPLATE_NAME,
-            "order_reminder": REMINDER_TEMPLATE_NAME,
         },
-        "reminder_window_hours": [REMINDER_HOURS, REMINDER_HOURS + REMINDER_WINDOW_HOURS],
     }), 200
 
 
