@@ -59,6 +59,7 @@ function formatPhone(phone) {
 
 const FILTERS = [
   { id: 'all', label: 'All' },
+  { id: 'unread', label: 'Unread' },
   { id: 'confirmation', label: 'Confirmation' },
   { id: 'fulfilled', label: 'Fulfilled' },
   { id: 'cancelled', label: 'Cancelled' },
@@ -92,6 +93,7 @@ export default function ConversationList({
   const emptyMessage = (() => {
     if (searchTerm) return 'No matches found'
     if (filter === 'cancelled') return 'No cancelled conversations'
+    if (filter === 'unread') return 'No unread conversations'
     if (filter === 'confirmation') return 'No conversations awaiting confirmation'
     if (filter === 'fulfilled') return 'No fulfilled conversations'
     return 'No conversations yet'

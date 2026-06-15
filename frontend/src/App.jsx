@@ -86,12 +86,13 @@ export default function App() {
       if (c.is_cancelled) acc.cancelled += 1
       else {
         acc.all += 1
+        if ((c.unread_count || 0) > 0) acc.unread += 1
         if (c.last_template === 'confirmation') acc.confirmation += 1
         else if (c.last_template === 'fulfilled') acc.fulfilled += 1
       }
       return acc
     },
-    { all: 0, confirmation: 0, fulfilled: 0, cancelled: 0 }
+    { all: 0, unread: 0, confirmation: 0, fulfilled: 0, cancelled: 0 }
   )
 
   const filteredConversations = conversations.filter((conv) => {
@@ -99,6 +100,7 @@ export default function App() {
       if (!conv.is_cancelled) return false
     } else {
       if (conv.is_cancelled) return false
+      if (filter === 'unread' && !((conv.unread_count || 0) > 0)) return false
       if (filter === 'confirmation' && conv.last_template !== 'confirmation') return false
       if (filter === 'fulfilled' && conv.last_template !== 'fulfilled') return false
     }
