@@ -35,6 +35,14 @@ WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
 # newlines so the inbox renders the details on multiple lines.
 BANK_DETAILS_TEXT = (os.getenv("BANK_DETAILS_TEXT") or "").strip().replace("\\n", "\n")
 
+# Optional: discount in Rs. deducted from the order total when the customer
+# pays by Bank Deposit. Encoded into the template's amount variable so the
+# customer sees both the original price and the discounted total.
+try:
+    BANK_DEPOSIT_DISCOUNT = float(os.getenv("BANK_DEPOSIT_DISCOUNT", "0") or "0")
+except ValueError:
+    BANK_DEPOSIT_DISCOUNT = 0.0
+
 FRONTEND_URL = os.getenv("FRONTEND_URL", "").strip()
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -314,12 +322,38 @@ def send_whatsapp_confirmation(data):
     )
 
 
+def _parse_amount(value):
+    """Coerce Shopify's stringy total to a float; None / bad input -> 0."""
+    try:
+        return float(value or 0)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _bank_total_variable(original_price):
+    """Render the {{4}} variable for the bank-deposit template.
+
+    If BANK_DEPOSIT_DISCOUNT is configured, we encode the original price,
+    the discount, and the final price into a single multi-segment string
+    so the existing 4-variable template can show the savings *without*
+    needing a Meta template re-approval.
+    """
+    original_f = _parse_amount(original_price)
+    if BANK_DEPOSIT_DISCOUNT <= 0:
+        return f"{original_f:.2f}"
+    final = max(0.0, original_f - BANK_DEPOSIT_DISCOUNT)
+    return (
+        f"{final:.2f} (Rs. {BANK_DEPOSIT_DISCOUNT:.0f} off — was Rs. {original_f:.2f})"
+    )
+
+
 def send_whatsapp_bank_deposit(data):
     """Send the bank-deposit variant of the order confirmation template.
 
-    The template should expect the same 4 variables as the COD template
-    (name, order, items, total) so a single payload shape works for both.
-    Bank account details live as static text inside the approved template.
+    The template uses the same 4 variables as the COD template
+    (name, order, items, total). The total variable is post-discount when
+    BANK_DEPOSIT_DISCOUNT is set, with the original price + savings inline
+    so no template restructuring is required.
     """
     return _send_template(
         BANK_DEPOSIT_TEMPLATE_NAME,
@@ -328,7 +362,7 @@ def send_whatsapp_bank_deposit(data):
             data["customer_name"],
             data["order_number"],
             data["products_text"],
-            str(data["total_price"]),
+            _bank_total_variable(data["total_price"]),
         ],
     )
 
@@ -521,6 +555,19 @@ def log_outgoing_bank_deposit_message(data, whatsapp_message_id):
 
     bank_section = BANK_DETAILS_TEXT or "(Bank details are shown to the customer inside the WhatsApp template.)"
 
+    original_f = _parse_amount(data["total_price"])
+    if BANK_DEPOSIT_DISCOUNT > 0:
+        final = max(0.0, original_f - BANK_DEPOSIT_DISCOUNT)
+        amount_section = (
+            f"Subtotal: Rs. {original_f:.2f}\n"
+            f"🎉 Bank Deposit Discount: -Rs. {BANK_DEPOSIT_DISCOUNT:.0f}\n"
+            f"💰 Total to Pay: Rs. {final:.2f}"
+        )
+        preview_amount = f"Rs. {final:.2f} (Rs. {BANK_DEPOSIT_DISCOUNT:.0f} off)"
+    else:
+        amount_section = f"Total Amount: Rs. {data['total_price']}"
+        preview_amount = f"Rs. {data['total_price']}"
+
     message_body = (
         f"Hi {data['customer_name']} 👋\n\n"
         f"Thank you for shopping with AstroLamps ✨\n\n"
@@ -528,15 +575,14 @@ def log_outgoing_bank_deposit_message(data, whatsapp_message_id):
         f"📦 Order Summary\n"
         f"Order ID: {data['order_number']}\n"
         f"Items: {data['products_text']}\n"
-        f"Total Amount: Rs. {data['total_price']}\n\n"
+        f"{amount_section}\n\n"
         f"🏦 Bank Details\n"
         f"{bank_section}\n\n"
         f"📸 Once paid, please send the payment screenshot here so we can dispatch your order."
     )
 
     preview_body = (
-        f"Bank Deposit | Order {data['order_number']} | "
-        f"Rs. {data['total_price']}"
+        f"Bank Deposit | Order {data['order_number']} | {preview_amount}"
     )
 
     supabase.table("messages").insert({
@@ -1172,6 +1218,7 @@ def home():
             "order_dispatched": FULFILLMENT_TEMPLATE_NAME,
         },
         "bank_details_configured": bool(BANK_DETAILS_TEXT),
+        "bank_deposit_discount_rs": BANK_DEPOSIT_DISCOUNT,
     }), 200
 
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { setConversationStatus } from '../utils/api'
 import './ConversationList.css'
 
@@ -119,29 +120,53 @@ export default function ConversationList({
   onFilterChange,
   counts,
 }) {
-  // Which conversation row currently has its tag-action dropdown open. We
-  // only allow one open at a time so it behaves like a typical menu.
-  const [openTagMenuId, setOpenTagMenuId] = useState(null)
+  // Tag-action dropdown state. We track the open menu's screen coordinates
+  // because we render via a portal — the conversation row is itself a
+  // <button> with overflow:hidden ancestors, so an inline absolute-positioned
+  // menu would (a) be invalid HTML (button-in-button blocks clicks) and
+  // (b) get clipped by the scroll container.
+  const [openMenu, setOpenMenu] = useState(null)
+  // { conversationId, actions, x, y } | null
   const [pendingTagAction, setPendingTagAction] = useState(false)
 
-  // Close the menu on any outside click. Listener is registered after the
-  // open click finishes (useEffect timing) so it doesn't immediately fire.
+  // Close on outside click, scroll, resize, or Escape. Listeners are
+  // registered AFTER the open click finishes propagating (useEffect timing)
+  // so they don't immediately fire and dismiss the menu we just opened.
   useEffect(() => {
-    if (!openTagMenuId) return
-    const handler = () => setOpenTagMenuId(null)
-    document.addEventListener('click', handler)
-    return () => document.removeEventListener('click', handler)
-  }, [openTagMenuId])
+    if (!openMenu) return
+    const close = () => setOpenMenu(null)
+    const onKey = (e) => { if (e.key === 'Escape') close() }
+    document.addEventListener('click', close)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      document.removeEventListener('click', close)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [openMenu])
 
-  const handleTagClick = (event, conversationId, hasActions) => {
+  const handleTagClick = (event, conversationId, actions) => {
     event.stopPropagation()
-    if (!hasActions) return
-    setOpenTagMenuId(openTagMenuId === conversationId ? null : conversationId)
+    if (!actions || actions.length === 0) return
+    if (openMenu?.conversationId === conversationId) {
+      setOpenMenu(null)
+      return
+    }
+    const rect = event.currentTarget.getBoundingClientRect()
+    setOpenMenu({
+      conversationId,
+      actions,
+      x: rect.left,
+      y: rect.bottom + 4,
+    })
   }
 
   const handleTagAction = async (event, conversationId, patch) => {
     event.stopPropagation()
-    setOpenTagMenuId(null)
+    setOpenMenu(null)
     if (pendingTagAction) return
     setPendingTagAction(true)
     try {
@@ -214,6 +239,33 @@ export default function ConversationList({
         })}
       </div>
 
+      {/* Tag dropdown — portalled to <body> so it escapes the row button
+          (HTML doesn't allow nested buttons) and the scroll container's
+          overflow clipping. */}
+      {openMenu &&
+        createPortal(
+          <div
+            className="cl-tag-menu"
+            role="menu"
+            style={{ top: openMenu.y, left: openMenu.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {openMenu.actions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                role="menuitem"
+                className="cl-tag-menu-item"
+                disabled={pendingTagAction}
+                onClick={(e) => handleTagAction(e, openMenu.conversationId, action.patch)}
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+
       {/* List */}
       <div className="cl-items">
         {loading ? (
@@ -265,41 +317,30 @@ export default function ConversationList({
                     {tag && (() => {
                       const actions = TAG_ACTIONS[tag.tag] || null
                       const hasActions = !!actions && actions.length > 0
-                      const isMenuOpen = openTagMenuId === conversation.id
+                      const onActivate = (e) => handleTagClick(e, conversation.id, actions)
                       return (
-                        <span className="cl-tag-wrap">
-                          <button
-                            type="button"
-                            className={`cl-tag ${tag.className} ${hasActions ? 'cl-tag-clickable' : ''}`}
-                            onClick={(e) => handleTagClick(e, conversation.id, hasActions)}
-                            title={hasActions ? 'Click to change status' : undefined}
-                          >
-                            {tag.label}
-                            {hasActions && (
-                              <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden>
-                                <path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                              </svg>
-                            )}
-                          </button>
-                          {hasActions && isMenuOpen && (
-                            <div
-                              className="cl-tag-menu"
-                              role="menu"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              {actions.map((action) => (
-                                <button
-                                  key={action.label}
-                                  type="button"
-                                  role="menuitem"
-                                  className="cl-tag-menu-item"
-                                  disabled={pendingTagAction}
-                                  onClick={(e) => handleTagAction(e, conversation.id, action.patch)}
-                                >
-                                  {action.label}
-                                </button>
-                              ))}
-                            </div>
+                        <span
+                          className={`cl-tag ${tag.className} ${hasActions ? 'cl-tag-clickable' : ''}`}
+                          role={hasActions ? 'button' : undefined}
+                          tabIndex={hasActions ? 0 : undefined}
+                          onClick={hasActions ? onActivate : undefined}
+                          onKeyDown={
+                            hasActions
+                              ? (e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault()
+                                    onActivate(e)
+                                  }
+                                }
+                              : undefined
+                          }
+                          title={hasActions ? 'Click to change status' : undefined}
+                        >
+                          {tag.label}
+                          {hasActions && (
+                            <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden className="cl-tag-caret">
+                              <path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
                           )}
                         </span>
                       )
