@@ -116,6 +116,37 @@
   background-color: rgba(134, 150, 160, 0.18);
 }
 
+/* Track button — shown only when the conversation has a real tracking
+   number persisted; links to the courier (currently Postex) tracking page. */
+.cw-track-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  background-color: #00a884;
+  color: #ffffff;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.08s ease;
+  white-space: nowrap;
+}
+
+.cw-track-btn:hover {
+  background-color: #008069;
+}
+
+.cw-track-btn:active {
+  transform: scale(0.97);
+}
+
+.cw-track-btn svg {
+  flex-shrink: 0;
+}
+
 /* ---------- Messages area ---------- */
 .cw-messages {
   flex: 1;
@@ -185,6 +216,12 @@
 
   .cw-icon-btn:hover {
     background-color: rgba(255, 255, 255, 0.15);
+  }
+
+  /* Compact pill on mobile so the header doesn't overflow on small screens. */
+  .cw-track-btn {
+    padding: 6px 12px;
+    font-size: 12.5px;
   }
 
   .cw-header-avatar {

@@ -129,19 +129,21 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
           </div>
         </div>
 
-        <div className="cw-header-actions" aria-hidden>
-          <button className="cw-icon-btn" title="Search">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
-              <path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99 1.49-1.49-4.99-5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z" />
-            </svg>
-          </button>
-          <button className="cw-icon-btn" title="Menu">
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
-              <circle cx="12" cy="5" r="2" />
-              <circle cx="12" cy="12" r="2" />
-              <circle cx="12" cy="19" r="2" />
-            </svg>
-          </button>
+        <div className="cw-header-actions">
+          {conversation.tracking_number && (
+            <a
+              href={`https://postex.pk/tracking?cn=${encodeURIComponent(conversation.tracking_number)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="cw-track-btn"
+              title={`Track on Postex (${conversation.tracking_number})`}
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                <path d="M20 8h-3V4H3c-1.11 0-2 .89-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm12 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm-1-5.5V9.5h2.5L21.46 13H17z" />
+              </svg>
+              <span>Track</span>
+            </a>
+          )}
         </div>
       </header>
 

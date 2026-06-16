@@ -133,6 +133,15 @@
   border-color: rgba(217, 48, 37, 0.40);
 }
 
+/* "Not on WhatsApp" is a non-actionable filter — use a neutral slate tone
+   so it doesn't compete visually with Pending/Confirmed (green) or
+   Cancelled (red). */
+.cl-filter-notwa.is-active {
+  background-color: rgba(91, 103, 112, 0.14);
+  color: #3d4a52;
+  border-color: rgba(91, 103, 112, 0.45);
+}
+
 .cl-filter-count {
   display: inline-flex;
   align-items: center;
@@ -155,6 +164,11 @@
 
 .cl-filter-cancelled.is-active .cl-filter-count {
   background-color: #c5221f;
+  color: #ffffff;
+}
+
+.cl-filter-notwa.is-active .cl-filter-count {
+  background-color: #5b6770;
   color: #ffffff;
 }
 

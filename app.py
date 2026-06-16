@@ -291,6 +291,30 @@ def _bare_order_number(order_number):
     return str(order_number or "").lstrip("#").strip()
 
 
+def _real_tracking_number(value):
+    """Return the value only if it looks like a real tracking number.
+
+    extract_fulfillment_data() falls back to 'Available within 24h' when
+    Shopify hasn't filled in a tracking number yet; we don't want that
+    sentinel persisted to conversations.tracking_number (it would render
+    a broken Track button in the inbox)."""
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s or s.lower().startswith("available"):
+        return None
+    return s
+
+
+def _real_tracking_company(value):
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s or s.lower().startswith("our courier"):
+        return None
+    return s
+
+
 # =========================
 # WHATSAPP TEMPLATE SEND
 # =========================
@@ -620,7 +644,7 @@ def log_outgoing_bank_deposit_message(data, whatsapp_message_id):
 CONFIRM_AUTO_REPLY_BODY = (
     "Thank you for confirming your order ✨\n\n"
     "We're getting it ready now and you'll receive a dispatch update from us shortly 📦\n\n"
-    "— Team AstroLamps"
+    "Team AstroLamps"
 )
 
 
@@ -687,13 +711,21 @@ def log_outgoing_fulfillment_message(data, whatsapp_message_id):
         "raw_payload": data,
     }).execute()
 
-    supabase.table("conversations").update({
+    conv_update = {
         "last_message": preview_body,
         "last_message_at": "now()",
         "last_template": TEMPLATE_TAG_FULFILLED,
         "is_cancelled": False,
         "updated_at": "now()",
-    }).eq("id", conversation["id"]).execute()
+    }
+    real_tracking = _real_tracking_number(data.get("tracking_number"))
+    real_company = _real_tracking_company(data.get("tracking_company"))
+    if real_tracking:
+        conv_update["tracking_number"] = real_tracking
+    if real_company:
+        conv_update["tracking_company"] = real_company
+
+    supabase.table("conversations").update(conv_update).eq("id", conversation["id"]).execute()
 
     print(f"Outgoing fulfillment logged in Supabase.")
     return conversation["id"]

@@ -63,9 +63,11 @@ function formatPhone(phone) {
 const FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'unread', label: 'Unread' },
-  { id: 'confirmation', label: 'Confirmation' },
+  { id: 'confirmed', label: 'Confirmed' },
+  { id: 'pending', label: 'Pending' },
   { id: 'fulfilled', label: 'Fulfilled' },
   { id: 'cancelled', label: 'Cancelled' },
+  { id: 'notwa', label: 'Not on WhatsApp' },
 ]
 
 function statusTagFor(conversation) {
@@ -183,8 +185,10 @@ export default function ConversationList({
     if (searchTerm) return 'No matches found'
     if (filter === 'cancelled') return 'No cancelled conversations'
     if (filter === 'unread') return 'No unread conversations'
-    if (filter === 'confirmation') return 'No conversations awaiting confirmation'
+    if (filter === 'pending') return 'No conversations awaiting customer reply'
+    if (filter === 'confirmed') return 'No confirmed orders ready to ship'
     if (filter === 'fulfilled') return 'No fulfilled conversations'
+    if (filter === 'notwa') return 'No customers flagged as Not on WhatsApp'
     return 'No conversations yet'
   })()
 

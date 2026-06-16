@@ -79,35 +79,55 @@ export default function App() {
   const selectedConversation =
     conversations.find((c) => c.id === selectedConversationId) || null
 
-  // 'confirmation' filter is a catch-all for everything still awaiting the
-  // customer's action — both the COD "Confirmation" tag and the
-  // "Bank Pending" tag (where we're waiting for a payment screenshot).
-  const isAwaitingConfirmation = (c) =>
+  // 'pending'   = awaiting customer action (COD confirmation OR bank deposit screenshot)
+  // 'confirmed' = customer has acted (tapped Confirm) or merchant has marked
+  //               bank deposit as paid — i.e. ready for the merchant to ship
+  const isPending = (c) =>
     c.last_template === 'confirmation' || c.last_template === 'bank_pending'
+  const isConfirmed = (c) =>
+    c.last_template === 'confirmed' || c.last_template === 'paid'
 
   // Counts driven by the unfiltered list so the pill badges always reflect
   // reality even when the user is mid-search.
   const counts = conversations.reduce(
     (acc, c) => {
-      if (c.is_cancelled) acc.cancelled += 1
-      else {
-        acc.all += 1
-        if ((c.unread_count || 0) > 0) acc.unread += 1
-        if (isAwaitingConfirmation(c)) acc.confirmation += 1
-        else if (c.last_template === 'fulfilled') acc.fulfilled += 1
+      if (c.is_cancelled) {
+        acc.cancelled += 1
+        return acc
       }
+      acc.all += 1
+      if (c.is_not_on_whatsapp) {
+        acc.notwa += 1
+        return acc
+      }
+      if ((c.unread_count || 0) > 0) acc.unread += 1
+      if (isPending(c)) acc.pending += 1
+      else if (isConfirmed(c)) acc.confirmed += 1
+      else if (c.last_template === 'fulfilled') acc.fulfilled += 1
       return acc
     },
-    { all: 0, unread: 0, confirmation: 0, fulfilled: 0, cancelled: 0 }
+    { all: 0, unread: 0, pending: 0, confirmed: 0, fulfilled: 0, cancelled: 0, notwa: 0 }
   )
 
   const filteredConversations = conversations.filter((conv) => {
     if (filter === 'cancelled') {
       if (!conv.is_cancelled) return false
+    } else if (filter === 'notwa') {
+      if (conv.is_cancelled) return false
+      if (!conv.is_not_on_whatsapp) return false
     } else {
       if (conv.is_cancelled) return false
+      // Customers we can't reach via WhatsApp shouldn't pollute the
+      // action-required filters; they live only in 'all' + 'notwa'.
+      if (
+        conv.is_not_on_whatsapp &&
+        (filter === 'pending' || filter === 'confirmed' || filter === 'unread')
+      ) {
+        return false
+      }
       if (filter === 'unread' && !((conv.unread_count || 0) > 0)) return false
-      if (filter === 'confirmation' && !isAwaitingConfirmation(conv)) return false
+      if (filter === 'pending' && !isPending(conv)) return false
+      if (filter === 'confirmed' && !isConfirmed(conv)) return false
       if (filter === 'fulfilled' && conv.last_template !== 'fulfilled') return false
     }
 
