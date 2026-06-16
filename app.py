@@ -259,13 +259,36 @@ def extract_fulfillment_data(order):
     tracking_company = (latest.get("tracking_company") or "").strip() or "Our courier partner"
     tracking_number = (latest.get("tracking_number") or "").strip() or "Available within 24h"
 
+    # Prefer the fulfillment's own line items (only what was shipped in this
+    # parcel for split shipments); fall back to the whole order's line items.
+    fulfillment_items = latest.get("line_items") or order.get("line_items") or []
+    products = []
+    for item in fulfillment_items:
+        title = (item.get("title") or "").strip()
+        variant = (item.get("variant_title") or "").strip()
+        qty = item.get("quantity") or 1
+        if variant and variant.lower() != "default title":
+            products.append(f"{title} ({variant}) x {qty}")
+        else:
+            products.append(f"{title} x {qty}")
+    products_text = ", ".join(products) or "—"
+
     return {
         "customer_name": _customer_name_from(order),
         "customer_phone": get_customer_phone(order),
         "order_number": order.get("name") or str(order.get("order_number")),
         "tracking_company": tracking_company,
         "tracking_number": tracking_number,
+        "products_text": products_text,
     }
+
+
+def _bare_order_number(order_number):
+    """Strip a leading '#' from a Shopify-style order name for use as a
+    Meta template variable. Shopify's `order.name` is '#12431'; templates
+    that hard-code '#' before the variable (e.g. 'order #{{2}}') would
+    otherwise render '##12431'."""
+    return str(order_number or "").lstrip("#").strip()
 
 
 # =========================
@@ -309,19 +332,6 @@ def _send_template(template_name, phone, variables):
     return None
 
 
-def send_whatsapp_confirmation(data):
-    return _send_template(
-        TEMPLATE_NAME,
-        data["customer_phone"],
-        [
-            data["customer_name"],
-            data["order_number"],
-            data["products_text"],
-            str(data["total_price"]),
-        ],
-    )
-
-
 def _parse_amount(value):
     """Coerce Shopify's stringy total to a float; None / bad input -> 0."""
     try:
@@ -330,52 +340,58 @@ def _parse_amount(value):
         return 0.0
 
 
-def _bank_total_variable(original_price):
-    """Render the {{4}} variable for the bank-deposit template.
-
-    If BANK_DEPOSIT_DISCOUNT is configured, we encode the original price,
-    the discount, and the final price into a single multi-segment string
-    so the existing 4-variable template can show the savings *without*
-    needing a Meta template re-approval.
-    """
+def _discounted_total(original_price):
+    """Original total minus BANK_DEPOSIT_DISCOUNT, floored at 0."""
     original_f = _parse_amount(original_price)
     if BANK_DEPOSIT_DISCOUNT <= 0:
-        return f"{original_f:.2f}"
-    final = max(0.0, original_f - BANK_DEPOSIT_DISCOUNT)
-    return (
-        f"{final:.2f} (Rs. {BANK_DEPOSIT_DISCOUNT:.0f} off — was Rs. {original_f:.2f})"
+        return original_f
+    return max(0.0, original_f - BANK_DEPOSIT_DISCOUNT)
+
+
+def send_whatsapp_confirmation(data):
+    """COD template — 4 variables: name, order#, items, total."""
+    return _send_template(
+        TEMPLATE_NAME,
+        data["customer_phone"],
+        [
+            data["customer_name"],
+            _bare_order_number(data["order_number"]),
+            data["products_text"],
+            f"{_parse_amount(data['total_price']):.2f}",
+        ],
     )
 
 
 def send_whatsapp_bank_deposit(data):
-    """Send the bank-deposit variant of the order confirmation template.
-
-    The template uses the same 4 variables as the COD template
-    (name, order, items, total). The total variable is post-discount when
-    BANK_DEPOSIT_DISCOUNT is set, with the original price + savings inline
-    so no template restructuring is required.
-    """
+    """Bank deposit template — 5 variables:
+    name, order#, items, subtotal, discounted total."""
+    original_f = _parse_amount(data["total_price"])
+    final = _discounted_total(original_f)
     return _send_template(
         BANK_DEPOSIT_TEMPLATE_NAME,
         data["customer_phone"],
         [
             data["customer_name"],
-            data["order_number"],
+            _bare_order_number(data["order_number"]),
             data["products_text"],
-            _bank_total_variable(data["total_price"]),
+            f"{original_f:.2f}",
+            f"{final:.2f}",
         ],
     )
 
 
 def send_whatsapp_fulfillment(data):
+    """Dispatch template — 5 variables:
+    name, order#, courier, tracking, items."""
     return _send_template(
         FULFILLMENT_TEMPLATE_NAME,
         data["customer_phone"],
         [
             data["customer_name"],
-            data["order_number"],
+            _bare_order_number(data["order_number"]),
             data["tracking_company"],
             data["tracking_number"],
+            data["products_text"],
         ],
     )
 
@@ -502,21 +518,19 @@ def log_outgoing_order_message(data, whatsapp_message_id):
     )
 
     message_body = (
-        f"Hi {data['customer_name']} 👋\n\n"
-        f"Thank you for shopping with AstroLamps ✨\n\n"
-        f"We've received your order and it's being prepared for dispatch.\n\n"
-        f"📦 Order Summary\n"
-        f"Order ID: {data['order_number']}\n"
-        f"Items: {data['products_text']}\n"
-        f"Total Amount: Rs. {data['total_price']}\n\n"
-        f"🚚 Estimated delivery: 2-4 working days\n\n"
-        f"Please confirm your order below so we can dispatch it on time."
+        f"Hi {data['customer_name']}, 👋\n\n"
+        f"We're pleased to inform you that your order {data['order_number']} has been received successfully and is awaiting confirmation.\n\n"
+        f"Items in your order: {data['products_text']}\n\n"
+        f"Order Total: Rs. {_parse_amount(data['total_price']):.2f}\n\n"
+        f"Estimated Delivery: 2–4 Working Days\n\n"
+        f"Please confirm your order below so we can proceed with dispatch.\n\n"
+        f"Thank you for choosing AstroLamps. We truly appreciate your trust! ✨"
     )
 
     preview_body = (
         f"Order {data['order_number']} | "
         f"{data['products_text']} | "
-        f"Rs. {data['total_price']}"
+        f"Rs. {_parse_amount(data['total_price']):.2f}"
     )
 
     supabase.table("messages").insert({
@@ -556,33 +570,25 @@ def log_outgoing_bank_deposit_message(data, whatsapp_message_id):
     bank_section = BANK_DETAILS_TEXT or "(Bank details are shown to the customer inside the WhatsApp template.)"
 
     original_f = _parse_amount(data["total_price"])
-    if BANK_DEPOSIT_DISCOUNT > 0:
-        final = max(0.0, original_f - BANK_DEPOSIT_DISCOUNT)
-        amount_section = (
-            f"Subtotal: Rs. {original_f:.2f}\n"
-            f"🎉 Bank Deposit Discount: -Rs. {BANK_DEPOSIT_DISCOUNT:.0f}\n"
-            f"💰 Total to Pay: Rs. {final:.2f}"
-        )
-        preview_amount = f"Rs. {final:.2f} (Rs. {BANK_DEPOSIT_DISCOUNT:.0f} off)"
-    else:
-        amount_section = f"Total Amount: Rs. {data['total_price']}"
-        preview_amount = f"Rs. {data['total_price']}"
+    final = _discounted_total(original_f)
+    discount_label = f"Rs{BANK_DEPOSIT_DISCOUNT:.0f}" if BANK_DEPOSIT_DISCOUNT > 0 else "no"
 
     message_body = (
-        f"Hi {data['customer_name']} 👋\n\n"
-        f"Thank you for shopping with AstroLamps ✨\n\n"
-        f"We've received your order via Bank Deposit. To complete it, please transfer the amount and share a screenshot of the receipt.\n\n"
-        f"📦 Order Summary\n"
-        f"Order ID: {data['order_number']}\n"
-        f"Items: {data['products_text']}\n"
-        f"{amount_section}\n\n"
-        f"🏦 Bank Details\n"
-        f"{bank_section}\n\n"
-        f"📸 Once paid, please send the payment screenshot here so we can dispatch your order."
+        f"Hi {data['customer_name']}, 👋\n\n"
+        f"We've received your order {data['order_number']} successfully.\n\n"
+        f"Items in your order: {data['products_text']}\n\n"
+        f"💳 Payment Details\n"
+        f"Order Subtotal: Rs. {original_f:.2f}\n"
+        f"Updated Amount After Discount ({discount_label} off): Rs. {final:.2f}\n\n"
+        f"🏦 {bank_section}\n\n"
+        f"📸 After making the payment, please send a screenshot of the transaction receipt here.\n\n"
+        f"Your order will be confirmed and prepared for dispatch once payment has been verified.\n\n"
+        f"Thank you for choosing AstroLamps."
     )
 
     preview_body = (
-        f"Bank Deposit | Order {data['order_number']} | {preview_amount}"
+        f"Bank Deposit | Order {data['order_number']} | Rs. {final:.2f}"
+        + (f" (Rs. {BANK_DEPOSIT_DISCOUNT:.0f} off)" if BANK_DEPOSIT_DISCOUNT > 0 else "")
     )
 
     supabase.table("messages").insert({
@@ -656,15 +662,13 @@ def log_outgoing_fulfillment_message(data, whatsapp_message_id):
     )
 
     message_body = (
-        f"Hi {data['customer_name']} 📦\n\n"
-        f"Great news — your AstroLamps order is on its way!\n\n"
-        f"✨ Shipment Details\n"
-        f"Order ID: {data['order_number']}\n"
+        f"Hi {data['customer_name']} 👋\n\n"
+        f"We're pleased to inform you that your order {data['order_number']} has been successfully dispatched.\n\n"
         f"Courier: {data['tracking_company']}\n"
-        f"Tracking #: {data['tracking_number']}\n\n"
+        f"Tracking #: {data['tracking_number']}\n"
+        f"Items in your shipment: {data['products_text']}\n\n"
         f"🚚 Expected delivery: 2-3 working days\n\n"
-        f"Sit tight — your AstroLamp will brighten your space very soon 💡\n\n"
-        f"Thank you for choosing AstroLamps."
+        f"Thank you for shopping with us."
     )
 
     preview_body = (
