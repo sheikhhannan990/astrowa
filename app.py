@@ -55,6 +55,27 @@ if FRONTEND_URL:
 CORS(app, origins=_allowed_origins)
 
 
+# Global safety net: any unhandled exception inside a request handler is
+# converted to a JSON response. Flask's default 500 page is plain HTML
+# without CORS headers, which makes the browser swallow the real error as
+# a generic "CORS error" — losing all diagnostic value.
+@app.errorhandler(Exception)
+def _json_error_handler(e):
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return jsonify({
+            "success": False,
+            "error": e.description or e.name,
+        }), e.code
+    print(f"===== UNHANDLED EXCEPTION: {type(e).__name__}: {e} =====")
+    import traceback
+    traceback.print_exc()
+    return jsonify({
+        "success": False,
+        "error": f"Server error: {type(e).__name__}: {str(e)[:300]}",
+    }), 500
+
+
 # =========================
 # IDEMPOTENCY CACHE
 # =========================
@@ -1136,11 +1157,21 @@ def whatsapp_webhook():
 # SEND CUSTOM MESSAGE
 # =========================
 
-@app.route("/send-message", methods=["POST"])
+@app.route("/send-message", methods=["POST", "OPTIONS"])
 def send_message():
-    data = request.json
+    """Send a free-form text reply from the inbox.
+
+    Wrapped in defensive error handling so every failure path returns a
+    proper JSON response with CORS headers — otherwise an unhandled
+    exception (e.g. WhatsApp API timeout, network error) makes
+    PythonAnywhere return a header-less 500 and the browser surfaces it
+    as a generic 'CORS error' with no diagnostic value."""
+    if request.method == "OPTIONS":
+        return "", 204
+
+    data = request.get_json(silent=True) or {}
     phone = format_phone(data.get("phone"))
-    message = data.get("message")
+    message = (data.get("message") or "").strip()
     conversation_id = data.get("conversation_id")
 
     if not phone or not message or not conversation_id:
@@ -1161,15 +1192,51 @@ def send_message():
         "Content-Type": "application/json",
     }
 
-    response = requests.post(url, headers=headers, json=payload)
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=20)
+    except requests.exceptions.Timeout:
+        print("===== SEND MESSAGE TIMEOUT =====")
+        return jsonify({
+            "success": False,
+            "error": "WhatsApp API timed out. Please try again.",
+        }), 504
+    except requests.exceptions.RequestException as e:
+        print(f"===== SEND MESSAGE NETWORK ERROR: {e} =====")
+        return jsonify({
+            "success": False,
+            "error": f"Could not reach WhatsApp API: {type(e).__name__}",
+        }), 502
+
     print("===== SEND MESSAGE RESPONSE =====")
     print(response.status_code)
-    print(response.text)
+    print(response.text[:600])
 
-    if response.status_code in [200, 201]:
+    if response.status_code not in (200, 201):
+        # Try to surface Meta's actual error message so the frontend can
+        # show something useful instead of a generic 'Failed to send'.
+        meta_error = response.text
+        try:
+            parsed = response.json()
+            err = parsed.get("error") or {}
+            msg = err.get("message") or ""
+            code = err.get("code")
+            details = err.get("error_data", {}).get("details") or ""
+            meta_error = " | ".join(p for p in [
+                f"#{code}" if code is not None else "",
+                msg,
+                details,
+            ] if p) or response.text
+        except Exception:
+            pass
+        return jsonify({"success": False, "error": meta_error}), 400
+
+    try:
         result = response.json()
-        whatsapp_message_id = result.get("messages", [{}])[0].get("id")
+    except Exception:
+        result = {}
+    whatsapp_message_id = (result.get("messages") or [{}])[0].get("id")
 
+    try:
         supabase.table("messages").insert({
             "conversation_id": conversation_id,
             "whatsapp_message_id": whatsapp_message_id,
@@ -1186,13 +1253,15 @@ def send_message():
             "unread_count": 0,
             "updated_at": "now()",
         }).eq("id", conversation_id).execute()
+    except Exception as e:
+        # WhatsApp already accepted the message, so don't fail the request
+        # — just log so we can investigate. The status webhook will reconcile.
+        print(f"===== SEND MESSAGE DB LOG FAILED: {e} =====")
 
-        return jsonify({
-            "success": True,
-            "whatsapp_message_id": whatsapp_message_id,
-        }), 200
-
-    return jsonify({"success": False, "error": response.text}), 400
+    return jsonify({
+        "success": True,
+        "whatsapp_message_id": whatsapp_message_id,
+    }), 200
 
 
 # =========================
