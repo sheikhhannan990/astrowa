@@ -55,6 +55,27 @@ if FRONTEND_URL:
 CORS(app, origins=_allowed_origins)
 
 
+# Belt-and-suspenders: ensure CORS headers are on EVERY response, including
+# ones from Flask's default error pages. flask-cors normally handles this,
+# but error responses occasionally slip through (especially when an
+# exception bypasses our custom error handler).
+@app.after_request
+def _ensure_cors_headers(resp):
+    origin = request.headers.get("Origin", "")
+    if origin and origin in _allowed_origins:
+        resp.headers.setdefault("Access-Control-Allow-Origin", origin)
+        resp.headers.setdefault("Vary", "Origin")
+        resp.headers.setdefault(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, X-Requested-With",
+        )
+        resp.headers.setdefault(
+            "Access-Control-Allow-Methods",
+            "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        )
+    return resp
+
+
 # Global safety net: any unhandled exception inside a request handler is
 # converted to a JSON response. Flask's default 500 page is plain HTML
 # without CORS headers, which makes the browser swallow the real error as
@@ -63,17 +84,21 @@ CORS(app, origins=_allowed_origins)
 def _json_error_handler(e):
     from werkzeug.exceptions import HTTPException
     if isinstance(e, HTTPException):
-        return jsonify({
+        resp = jsonify({
             "success": False,
             "error": e.description or e.name,
-        }), e.code
+        })
+        resp.status_code = e.code
+        return resp
     print(f"===== UNHANDLED EXCEPTION: {type(e).__name__}: {e} =====")
     import traceback
     traceback.print_exc()
-    return jsonify({
+    resp = jsonify({
         "success": False,
         "error": f"Server error: {type(e).__name__}: {str(e)[:300]}",
-    }), 500
+    })
+    resp.status_code = 500
+    return resp
 
 
 # =========================
