@@ -71,9 +71,15 @@ def _normalize_origin(o):
 
 # CORS: lock down origins so prod (Netlify) and dev (Vite) both work, but
 # nothing else can hit the API from a browser.
+# FRONTEND_URL may be a single URL or a comma-separated list of URLs so the
+# merchant can keep both an old preview deploy and a new prod deploy working
+# without having to remember to update the backend after every Netlify rename.
 _allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 if FRONTEND_URL:
-    _allowed_origins.append(FRONTEND_URL)
+    for raw in FRONTEND_URL.split(","):
+        cleaned = raw.strip()
+        if cleaned:
+            _allowed_origins.append(cleaned)
 _allowed_origins_normalized = {_normalize_origin(o) for o in _allowed_origins}
 log.info(f"CORS allowed_origins = {_allowed_origins}")
 CORS(app, origins=_allowed_origins)
