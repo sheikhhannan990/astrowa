@@ -40,7 +40,9 @@ export default function ReplyInput({ conversation }) {
   }
 
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Enter inserts a newline (textarea default). Ctrl/Cmd+Enter sends —
+    // a power-user shortcut so you don't have to reach for the mouse.
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
       handleSendMessage(e)
     }

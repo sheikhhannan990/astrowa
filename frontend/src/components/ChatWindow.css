@@ -116,35 +116,167 @@
   background-color: rgba(134, 150, 160, 0.18);
 }
 
-/* Track button — shown only when the conversation has a real tracking
-   number persisted; links to the courier (currently Postex) tracking page. */
-.cw-track-btn {
+/* Pills in the chat header (Address + Track). Both share the same base
+   style so the header stays visually consistent regardless of which
+   buttons are present. */
+.cw-header-actions {
+  gap: 8px;
+}
+
+.cw-action-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.cw-header-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 7px 14px;
-  background-color: #00a884;
-  color: #ffffff;
   border-radius: 999px;
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.2px;
   text-decoration: none;
   cursor: pointer;
-  transition: background-color 0.15s ease, transform 0.08s ease;
   white-space: nowrap;
+  transition: background-color 0.15s ease, transform 0.08s ease,
+    color 0.15s ease, border-color 0.15s ease;
+}
+
+.cw-header-pill:active {
+  transform: scale(0.97);
+}
+
+.cw-header-pill svg {
+  flex-shrink: 0;
+}
+
+.cw-pill-caret {
+  margin-left: -2px;
+  opacity: 0.85;
+  transition: transform 0.15s ease;
+}
+
+/* Track button — links to the courier (currently Postex) tracking page. */
+.cw-track-btn {
+  background-color: #00a884;
+  color: #ffffff;
 }
 
 .cw-track-btn:hover {
   background-color: #008069;
 }
 
-.cw-track-btn:active {
-  transform: scale(0.97);
+/* Address button — neutral pill so it doesn't compete with Track for
+   visual weight; flips to the brand green when the dropdown is open. */
+.cw-address-btn {
+  background-color: rgba(0, 168, 132, 0.10);
+  color: #008069;
+  border: 1px solid rgba(0, 168, 132, 0.30);
 }
 
-.cw-track-btn svg {
-  flex-shrink: 0;
+.cw-address-btn:hover {
+  background-color: rgba(0, 168, 132, 0.16);
+}
+
+.cw-address-btn.is-open {
+  background-color: #00a884;
+  color: #ffffff;
+  border-color: #00a884;
+}
+
+.cw-address-btn.is-open .cw-pill-caret {
+  transform: rotate(180deg);
+}
+
+/* Dropdown panel anchored under the Address pill. Position: absolute is
+   fine here because the panel lives in the chat window root, not inside
+   the scrollable conversation list. */
+.cw-address-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  min-width: 280px;
+  max-width: 340px;
+  background-color: #ffffff;
+  border: 1px solid var(--wa-panel-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(11, 20, 26, 0.18);
+  padding: 0;
+  overflow: hidden;
+  animation: cw-addr-pop 0.12s ease-out;
+}
+
+@keyframes cw-addr-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.cw-address-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  background-color: #f6f8fa;
+  border-bottom: 1px solid var(--wa-panel-border);
+}
+
+.cw-address-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: #54656f;
+}
+
+.cw-address-copy {
+  font-size: 12px;
+  font-weight: 600;
+  color: #008069;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background-color: transparent;
+  border: 1px solid rgba(0, 168, 132, 0.35);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.cw-address-copy:hover {
+  background-color: rgba(0, 168, 132, 0.10);
+}
+
+.cw-address-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: #111b21;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.cw-address-line {
+  word-break: break-word;
+}
+
+.cw-address-name {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.cw-address-muted {
+  color: #667781;
+  font-size: 12.5px;
+  margin-top: 4px;
 }
 
 /* ---------- Messages area ---------- */
@@ -218,10 +350,23 @@
     background-color: rgba(255, 255, 255, 0.15);
   }
 
-  /* Compact pill on mobile so the header doesn't overflow on small screens. */
-  .cw-track-btn {
-    padding: 6px 12px;
-    font-size: 12.5px;
+  /* Compact pills on mobile so the header doesn't overflow on small
+     screens. Applies to both Address and Track buttons. */
+  .cw-header-pill {
+    padding: 6px 11px;
+    font-size: 12px;
+    gap: 5px;
+  }
+
+  .cw-header-actions {
+    gap: 6px;
+  }
+
+  /* Make the address dropdown fit narrow screens without spilling off
+     the right edge. */
+  .cw-address-panel {
+    min-width: 220px;
+    max-width: min(280px, calc(100vw - 24px));
   }
 
   .cw-header-avatar {

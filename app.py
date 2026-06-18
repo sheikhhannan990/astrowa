@@ -330,6 +330,43 @@ def _customer_name_from(order):
     )
 
 
+def _extract_shipping_address(order):
+    """Pull a compact, frontend-friendly subset of Shopify's shipping_address
+    so we can show the merchant the customer's address inside the inbox
+    (helps them spot incomplete addresses without leaving WhatsApp).
+
+    Falls back to billing_address or customer.default_address when the
+    shipping_address isn't present (digital orders, draft orders, etc.).
+    Returns None when no usable address exists."""
+    addr = (
+        order.get("shipping_address")
+        or order.get("billing_address")
+        or ((order.get("customer") or {}).get("default_address"))
+        or {}
+    )
+    if not addr:
+        return None
+
+    def _s(key):
+        v = addr.get(key)
+        return v.strip() if isinstance(v, str) else (v or None)
+
+    payload = {
+        "name": _s("name") or " ".join(filter(None, [_s("first_name"), _s("last_name")])).strip() or None,
+        "phone": _s("phone"),
+        "address1": _s("address1"),
+        "address2": _s("address2"),
+        "city": _s("city"),
+        "province": _s("province"),
+        "zip": _s("zip"),
+        "country": _s("country"),
+        "company": _s("company"),
+    }
+    # Drop empty values to keep the JSON compact.
+    payload = {k: v for k, v in payload.items() if v}
+    return payload or None
+
+
 def extract_order_data(order):
     products = []
     for item in order.get("line_items", []) or []:
@@ -350,6 +387,7 @@ def extract_order_data(order):
         "order_number": order.get("name") or str(order.get("order_number")),
         "products_text": ", ".join(products),
         "total_price": order.get("total_price"),
+        "shipping_address": _extract_shipping_address(order),
     }
 
 
@@ -670,13 +708,16 @@ def log_outgoing_order_message(data, whatsapp_message_id):
         "raw_payload": data,
     }).execute()
 
-    supabase.table("conversations").update({
+    conv_update = {
         "last_message": preview_body,
         "last_message_at": "now()",
         "last_template": TEMPLATE_TAG_CONFIRMATION,
         "is_cancelled": False,
         "updated_at": "now()",
-    }).eq("id", conversation["id"]).execute()
+    }
+    if data.get("shipping_address"):
+        conv_update["shipping_address"] = data["shipping_address"]
+    supabase.table("conversations").update(conv_update).eq("id", conversation["id"]).execute()
 
     print(f"Outgoing confirmation logged in Supabase.")
     return conversation["id"]
@@ -728,13 +769,16 @@ def log_outgoing_bank_deposit_message(data, whatsapp_message_id):
         "raw_payload": data,
     }).execute()
 
-    supabase.table("conversations").update({
+    conv_update = {
         "last_message": preview_body,
         "last_message_at": "now()",
         "last_template": TEMPLATE_TAG_BANK_PENDING,
         "is_cancelled": False,
         "updated_at": "now()",
-    }).eq("id", conversation["id"]).execute()
+    }
+    if data.get("shipping_address"):
+        conv_update["shipping_address"] = data["shipping_address"]
+    supabase.table("conversations").update(conv_update).eq("id", conversation["id"]).execute()
 
     print("Outgoing bank-deposit message logged in Supabase.")
     return conversation["id"]

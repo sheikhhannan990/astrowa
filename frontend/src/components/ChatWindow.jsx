@@ -9,12 +9,34 @@ function formatPhone(phone) {
   return phone.replace(/(\d{2})(\d{3})(\d{7})/, '+$1 $2 $3')
 }
 
+// Formats the address dict from Supabase (a compact subset of Shopify's
+// shipping_address) into a multi-line string for the dropdown + clipboard.
+function formatAddress(addr) {
+  if (!addr || typeof addr !== 'object') return ''
+  const cityLine = [addr.city, addr.province, addr.zip].filter(Boolean).join(', ')
+  return [
+    addr.name,
+    addr.company,
+    addr.address1,
+    addr.address2,
+    cityLine,
+    addr.country,
+    addr.phone,
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
 export default function ChatWindow({ conversation, onBack, onConversationUpdate, isMobile }) {
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [showAddress, setShowAddress] = useState(false)
+  const [addressCopied, setAddressCopied] = useState(false)
   const messagesEndRef = useRef(null)
   const scrollRef = useRef(null)
+  const addressBtnRef = useRef(null)
+  const addressPanelRef = useRef(null)
 
   useEffect(() => {
     if (!conversation?.id) return
@@ -57,6 +79,35 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages.length])
 
+  // Close the Address dropdown when navigating to another chat, clicking
+  // outside it, or pressing Escape — same pattern as the tag dropdown.
+  useEffect(() => {
+    setShowAddress(false)
+    setAddressCopied(false)
+  }, [conversation?.id])
+
+  useEffect(() => {
+    if (!showAddress) return
+    const onDocClick = (e) => {
+      if (
+        addressPanelRef.current?.contains(e.target) ||
+        addressBtnRef.current?.contains(e.target)
+      ) {
+        return
+      }
+      setShowAddress(false)
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') setShowAddress(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [showAddress])
+
   async function fetchMessages() {
     try {
       setLoading(true)
@@ -98,6 +149,24 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
   }
 
   const initial = (conversation.customer_name || 'C')[0].toUpperCase()
+  const shippingAddress = conversation.shipping_address
+  const hasAddress = !!(
+    shippingAddress &&
+    typeof shippingAddress === 'object' &&
+    Object.keys(shippingAddress).length > 0
+  )
+  const addressText = hasAddress ? formatAddress(shippingAddress) : ''
+
+  async function copyAddress() {
+    if (!addressText) return
+    try {
+      await navigator.clipboard.writeText(addressText)
+      setAddressCopied(true)
+      setTimeout(() => setAddressCopied(false), 1500)
+    } catch {
+      setAddressCopied(false)
+    }
+  }
 
   return (
     <div className={`chat-window ${isMobile ? 'is-mobile' : ''}`}>
@@ -130,12 +199,95 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
         </div>
 
         <div className="cw-header-actions">
+          {hasAddress && (
+            <div className="cw-action-wrap">
+              <button
+                ref={addressBtnRef}
+                type="button"
+                className={`cw-header-pill cw-address-btn ${showAddress ? 'is-open' : ''}`}
+                onClick={() => setShowAddress((v) => !v)}
+                aria-expanded={showAddress}
+                aria-haspopup="dialog"
+                title="View shipping address"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                  <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z" />
+                </svg>
+                <span>Address</span>
+                <svg
+                  viewBox="0 0 12 12"
+                  width="10"
+                  height="10"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="cw-pill-caret"
+                  aria-hidden
+                >
+                  <path d="M3 4.5l3 3 3-3" />
+                </svg>
+              </button>
+              {showAddress && (
+                <div
+                  ref={addressPanelRef}
+                  className="cw-address-panel"
+                  role="dialog"
+                  aria-label="Shipping address"
+                >
+                  <div className="cw-address-panel-head">
+                    <span className="cw-address-panel-title">Shipping address</span>
+                    <button
+                      type="button"
+                      className="cw-address-copy"
+                      onClick={copyAddress}
+                      aria-label="Copy address"
+                    >
+                      {addressCopied ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                  <div className="cw-address-body">
+                    {shippingAddress.name && (
+                      <div className="cw-address-line cw-address-name">
+                        {shippingAddress.name}
+                      </div>
+                    )}
+                    {shippingAddress.company && (
+                      <div className="cw-address-line">{shippingAddress.company}</div>
+                    )}
+                    {shippingAddress.address1 && (
+                      <div className="cw-address-line">{shippingAddress.address1}</div>
+                    )}
+                    {shippingAddress.address2 && (
+                      <div className="cw-address-line">{shippingAddress.address2}</div>
+                    )}
+                    {(shippingAddress.city || shippingAddress.province || shippingAddress.zip) && (
+                      <div className="cw-address-line">
+                        {[shippingAddress.city, shippingAddress.province, shippingAddress.zip]
+                          .filter(Boolean)
+                          .join(', ')}
+                      </div>
+                    )}
+                    {shippingAddress.country && (
+                      <div className="cw-address-line">{shippingAddress.country}</div>
+                    )}
+                    {shippingAddress.phone && (
+                      <div className="cw-address-line cw-address-muted">
+                        {shippingAddress.phone}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {conversation.tracking_number && (
             <a
               href={`https://postex.pk/tracking?cn=${encodeURIComponent(conversation.tracking_number)}`}
               target="_blank"
               rel="noreferrer"
-              className="cw-track-btn"
+              className="cw-header-pill cw-track-btn"
               title={`Track on Postex (${conversation.tracking_number})`}
             >
               <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
