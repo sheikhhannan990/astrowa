@@ -3,6 +3,8 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 import os
 import json
+import logging
+import sys
 import threading
 import time
 import mimetypes
@@ -10,6 +12,18 @@ import requests
 from supabase import create_client
 
 load_dotenv()
+
+# Logging: route everything to stderr so it shows up in PythonAnywhere's
+# Error log (the same log where httpx prints its outgoing request lines).
+# print() goes to stdout which on PA lands in the Server log — easy to
+# miss when debugging.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    stream=sys.stderr,
+    force=True,
+)
+log = logging.getLogger("astrowa")
 
 app = Flask(__name__)
 
@@ -47,23 +61,44 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "").strip()
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
+
+def _normalize_origin(o):
+    """Strip trailing slash + lowercase so 'https://x.com' and
+    'https://x.com/' both match. This avoids the most common
+    FRONTEND_URL typo silently breaking CORS."""
+    return (o or "").rstrip("/").lower()
+
+
 # CORS: lock down origins so prod (Netlify) and dev (Vite) both work, but
 # nothing else can hit the API from a browser.
 _allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 if FRONTEND_URL:
     _allowed_origins.append(FRONTEND_URL)
+_allowed_origins_normalized = {_normalize_origin(o) for o in _allowed_origins}
+log.info(f"CORS allowed_origins = {_allowed_origins}")
 CORS(app, origins=_allowed_origins)
+
+
+@app.before_request
+def _log_request():
+    # Skip noisy webhook traffic; we only need this for inbox UI calls.
+    if request.path in ("/", "/shopify/order-created", "/shopify/order-fulfilled", "/whatsapp/webhook"):
+        return
+    log.info(
+        f"REQ {request.method} {request.path} origin={request.headers.get('Origin', '-')} ua={(request.headers.get('User-Agent', '') or '')[:40]}"
+    )
 
 
 # Belt-and-suspenders: ensure CORS headers are on EVERY response, including
 # ones from Flask's default error pages. flask-cors normally handles this,
-# but error responses occasionally slip through (especially when an
-# exception bypasses our custom error handler).
+# but error responses occasionally slip through.
 @app.after_request
 def _ensure_cors_headers(resp):
     origin = request.headers.get("Origin", "")
-    if origin and origin in _allowed_origins:
-        resp.headers.setdefault("Access-Control-Allow-Origin", origin)
+    if origin and _normalize_origin(origin) in _allowed_origins_normalized:
+        # Echo the EXACT origin back (browsers reject responses where
+        # ACAO doesn't byte-match the request's Origin).
+        resp.headers["Access-Control-Allow-Origin"] = origin
         resp.headers.setdefault("Vary", "Origin")
         resp.headers.setdefault(
             "Access-Control-Allow-Headers",
@@ -74,6 +109,23 @@ def _ensure_cors_headers(resp):
             "GET, POST, PUT, PATCH, DELETE, OPTIONS",
         )
     return resp
+
+
+@app.route("/diag", methods=["GET"])
+def diag():
+    """Diagnostic endpoint. Open in the browser from the Netlify site
+    via fetch('/diag') OR hit directly to verify the backend is up.
+    Returns the Origin header it received + the CORS allow-list."""
+    origin = request.headers.get("Origin", "")
+    return jsonify({
+        "ok": True,
+        "request_origin": origin or None,
+        "request_origin_normalized": _normalize_origin(origin) or None,
+        "allowed_origins": _allowed_origins,
+        "allowed_origins_normalized": sorted(_allowed_origins_normalized),
+        "origin_matches": _normalize_origin(origin) in _allowed_origins_normalized if origin else None,
+        "frontend_url_env": FRONTEND_URL or None,
+    })
 
 
 # Global safety net: any unhandled exception inside a request handler is
@@ -90,9 +142,7 @@ def _json_error_handler(e):
         })
         resp.status_code = e.code
         return resp
-    print(f"===== UNHANDLED EXCEPTION: {type(e).__name__}: {e} =====")
-    import traceback
-    traceback.print_exc()
+    log.exception(f"UNHANDLED EXCEPTION on {request.method} {request.path}: {type(e).__name__}: {e}")
     resp = jsonify({
         "success": False,
         "error": f"Server error: {type(e).__name__}: {str(e)[:300]}",
@@ -1192,14 +1242,20 @@ def send_message():
     PythonAnywhere return a header-less 500 and the browser surfaces it
     as a generic 'CORS error' with no diagnostic value."""
     if request.method == "OPTIONS":
+        log.info("SEND-MESSAGE OPTIONS preflight")
         return "", 204
 
     data = request.get_json(silent=True) or {}
     phone = format_phone(data.get("phone"))
     message = (data.get("message") or "").strip()
     conversation_id = data.get("conversation_id")
+    log.info(
+        f"SEND-MESSAGE POST phone={phone[-4:] if phone else '-'} "
+        f"msg_len={len(message)} conv_id={'set' if conversation_id else 'missing'}"
+    )
 
     if not phone or not message or not conversation_id:
+        log.warning("SEND-MESSAGE rejected: missing required fields")
         return jsonify({
             "success": False,
             "error": "phone, message and conversation_id are required",
@@ -1220,21 +1276,19 @@ def send_message():
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=20)
     except requests.exceptions.Timeout:
-        print("===== SEND MESSAGE TIMEOUT =====")
+        log.error("SEND-MESSAGE timeout calling WhatsApp Graph API")
         return jsonify({
             "success": False,
             "error": "WhatsApp API timed out. Please try again.",
         }), 504
     except requests.exceptions.RequestException as e:
-        print(f"===== SEND MESSAGE NETWORK ERROR: {e} =====")
+        log.error(f"SEND-MESSAGE network error: {type(e).__name__}: {e}")
         return jsonify({
             "success": False,
             "error": f"Could not reach WhatsApp API: {type(e).__name__}",
         }), 502
 
-    print("===== SEND MESSAGE RESPONSE =====")
-    print(response.status_code)
-    print(response.text[:600])
+    log.info(f"SEND-MESSAGE Meta response status={response.status_code} body={response.text[:400]}")
 
     if response.status_code not in (200, 201):
         # Try to surface Meta's actual error message so the frontend can
@@ -1281,7 +1335,7 @@ def send_message():
     except Exception as e:
         # WhatsApp already accepted the message, so don't fail the request
         # — just log so we can investigate. The status webhook will reconcile.
-        print(f"===== SEND MESSAGE DB LOG FAILED: {e} =====")
+        log.error(f"SEND-MESSAGE DB log failed (message was already sent): {e}")
 
     return jsonify({
         "success": True,
