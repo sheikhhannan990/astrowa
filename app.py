@@ -215,8 +215,11 @@ TEMPLATE_TAG_FULFILLED = "fulfilled"         # Order shipped
 # tags (confirmation / fulfilled / confirmed) are intentionally excluded so
 # the merchant can't accidentally rewind a Shopify-driven status.
 _MANUALLY_SETTABLE_TAGS = {
-    TEMPLATE_TAG_PAID,
+    TEMPLATE_TAG_CONFIRMATION,
     TEMPLATE_TAG_BANK_PENDING,
+    TEMPLATE_TAG_CONFIRMED,
+    TEMPLATE_TAG_PAID,
+    TEMPLATE_TAG_FULFILLED,
     None,  # allow clearing the tag
 }
 
@@ -1435,6 +1438,80 @@ def set_conversation_status(conversation_id):
         return jsonify({"success": False, "error": "conversation not found"}), 404
 
     return jsonify({"success": True, "conversation": result.data[0]}), 200
+
+
+def _purge_conversations(conversation_ids):
+    """Delete one or more conversations and all of their dependent rows.
+
+    Order matters: message_status_events → messages → conversations.
+    We do it explicitly so this works regardless of whether the FK columns
+    in Supabase were created with ON DELETE CASCADE."""
+    ids = [str(cid) for cid in conversation_ids if cid]
+    if not ids:
+        return 0
+
+    message_ids = []
+    msgs = (
+        supabase.table("messages")
+        .select("id")
+        .in_("conversation_id", ids)
+        .execute()
+    )
+    if msgs.data:
+        message_ids = [m["id"] for m in msgs.data]
+
+    if message_ids:
+        # Some installs don't have a message_status_events table; ignore if absent.
+        try:
+            supabase.table("message_status_events").delete().in_("message_id", message_ids).execute()
+        except Exception as e:
+            log.warning(f"delete message_status_events skipped: {e}")
+        supabase.table("messages").delete().in_("conversation_id", ids).execute()
+
+    deleted = supabase.table("conversations").delete().in_("id", ids).execute()
+    return len(deleted.data or [])
+
+
+@app.route("/conversations/<conversation_id>", methods=["DELETE", "OPTIONS"])
+def delete_conversation(conversation_id):
+    """Hard-delete a single conversation and its messages.
+
+    Use the bulk endpoint for multi-row deletes from the inbox UI's
+    Select mode — it's one round trip instead of N."""
+    if request.method == "OPTIONS":
+        return "", 204
+    try:
+        count = _purge_conversations([conversation_id])
+    except Exception as e:
+        log.exception(f"delete_conversation failed for {conversation_id}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+    if count == 0:
+        return jsonify({"success": False, "error": "conversation not found"}), 404
+    return jsonify({"success": True, "deleted": count}), 200
+
+
+@app.route("/conversations/bulk-delete", methods=["POST", "OPTIONS"])
+def bulk_delete_conversations():
+    """Hard-delete multiple conversations in one request.
+
+    Body: { "ids": ["uuid-1", "uuid-2", ...] }
+    Returns: { "success": true, "deleted": N }"""
+    if request.method == "OPTIONS":
+        return "", 204
+    data = request.get_json(silent=True) or {}
+    ids = data.get("ids") or []
+    if not isinstance(ids, list) or not ids:
+        return jsonify({"success": False, "error": "ids (non-empty list) required"}), 400
+    # Soft safety cap — the inbox UI is unlikely to ever batch more than a
+    # few hundred and Postgres prefers many smaller IN-clauses over one huge.
+    if len(ids) > 500:
+        return jsonify({"success": False, "error": "max 500 ids per request"}), 400
+    try:
+        count = _purge_conversations(ids)
+    except Exception as e:
+        log.exception(f"bulk_delete_conversations failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+    return jsonify({"success": True, "deleted": count}), 200
 
 
 # =========================

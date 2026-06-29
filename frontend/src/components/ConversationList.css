@@ -46,6 +46,103 @@
   text-overflow: ellipsis;
 }
 
+/* Small icon button on the right side of the top bar — opens Select mode. */
+.cl-topbar-action {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #54656f;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.cl-topbar-action:hover {
+  background-color: rgba(134, 150, 160, 0.18);
+  color: var(--wa-accent-dark);
+}
+
+/* Selection-mode toolbar that replaces the brand row when the merchant
+   is bulk-selecting conversations. Same height as the default top bar
+   so nothing below it jumps when entering/exiting select mode. */
+.cl-topbar.is-select-mode {
+  background-color: var(--wa-accent);
+  border-bottom-color: var(--wa-accent-dark);
+}
+
+.cl-select-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  color: #ffffff;
+}
+
+.cl-select-cancel {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease;
+}
+
+.cl-select-cancel:hover {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+.cl-select-count {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cl-select-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  background-color: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  border: none;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.cl-select-delete:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.28);
+}
+
+.cl-select-delete:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.cl-select-delete svg {
+  flex-shrink: 0;
+}
+
 /* ---------- Search ---------- */
 .cl-search-wrap {
   padding: 7px 12px;
@@ -411,6 +508,51 @@
 .cl-tag-menu-item:disabled {
   opacity: 0.5;
   cursor: wait;
+}
+
+/* Destructive action (Delete conversation) — red text + faint red hover.
+   Lives at the bottom of the menu with a separator above. */
+.cl-tag-menu-item.is-destructive {
+  color: #c5221f;
+  font-weight: 500;
+}
+
+.cl-tag-menu-item.is-destructive:hover:not(:disabled) {
+  background-color: rgba(217, 48, 37, 0.10);
+}
+
+.cl-tag-menu-divider {
+  height: 1px;
+  margin: 4px 0;
+  background-color: var(--wa-panel-border);
+}
+
+/* ---------- Bulk select: per-row checkbox ---------- */
+.cl-row-check {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(134, 150, 160, 0.55);
+  background-color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-right: 12px;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.cl-row-check.is-on {
+  background-color: var(--wa-accent);
+  border-color: var(--wa-accent);
+}
+
+.cl-item.is-selected {
+  background-color: rgba(0, 168, 132, 0.10);
+}
+
+.cl-item.is-selected:hover {
+  background-color: rgba(0, 168, 132, 0.14);
 }
 
 .cl-item.is-cancelled .cl-name,
