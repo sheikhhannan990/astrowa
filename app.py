@@ -462,11 +462,30 @@ def _real_tracking_company(value):
 # WHATSAPP TEMPLATE SEND
 # =========================
 
-def _send_template(template_name, phone, variables):
-    """Generic body-only template sender. variables is an ordered list of strings."""
+def _send_template(template_name, phone, variables, button_params=None):
+    """Generic template sender. variables is an ordered list of body strings.
+    button_params, if given, is an ordered list of strings for dynamic URL
+    button parameters — index-matched to the button's position in the
+    template (index 0 = first button)."""
     if not template_name:
         print(f"Cannot send template — template name not configured.")
         return None
+
+    components = [
+        {
+            "type": "body",
+            "parameters": [{"type": "text", "text": str(v)} for v in variables],
+        }
+    ]
+
+    if button_params:
+        for i, param in enumerate(button_params):
+            components.append({
+                "type": "button",
+                "sub_type": "url",
+                "index": str(i),
+                "parameters": [{"type": "text", "text": str(param)}],
+            })
 
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     payload = {
@@ -476,12 +495,7 @@ def _send_template(template_name, phone, variables):
         "template": {
             "name": template_name,
             "language": {"code": TEMPLATE_LANGUAGE},
-            "components": [
-                {
-                    "type": "body",
-                    "parameters": [{"type": "text", "text": str(v)} for v in variables],
-                }
-            ],
+            "components": components,
         },
     }
     headers = {
@@ -548,8 +562,12 @@ def send_whatsapp_bank_deposit(data):
 
 
 def send_whatsapp_fulfillment(data):
-    """Dispatch template — 5 variables:
-    name, order#, courier, tracking, items."""
+    """Dispatch template — 5 body variables:
+    name, order#, courier, tracking, items.
+    Plus 1 dynamic button param: tracking number, appended to the Postex
+    tracking URL registered on the template's "Track Your Order" button
+    (https://postex.pk/tracking?cn={{1}})."""
+    tracking_number = data["tracking_number"]
     return _send_template(
         FULFILLMENT_TEMPLATE_NAME,
         data["customer_phone"],
@@ -557,9 +575,10 @@ def send_whatsapp_fulfillment(data):
             data["customer_name"],
             _bare_order_number(data["order_number"]),
             data["tracking_company"],
-            data["tracking_number"],
+            tracking_number,
             data["products_text"],
         ],
+        button_params=[tracking_number],
     )
 
 
