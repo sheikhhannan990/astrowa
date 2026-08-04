@@ -1153,13 +1153,18 @@ def order_created():
 
     if existing_conversation.data:
         # Conversation exists; block the send if we already sent *any*
-        # confirmation-class template (COD or Bank Deposit) for this order.
+        # confirmation-class template (COD or Bank Deposit) for THIS order.
+        # Scoped by raw_payload->>order_number because "conversations" rows
+        # are reused across a customer's repeat orders (keyed by phone, not
+        # order) — without this, a template sent for a customer's earlier
+        # order would look like a duplicate for their new one.
         candidate_templates = [t for t in (TEMPLATE_NAME, BANK_DEPOSIT_TEMPLATE_NAME) if t]
         already_sent = (
             supabase.table("messages")
             .select("id")
             .eq("conversation_id", existing_conversation.data[0]["id"])
             .in_("template_name", candidate_templates)
+            .eq("raw_payload->>order_number", extracted["order_number"])
             .limit(1)
             .execute()
         )
@@ -1222,7 +1227,12 @@ def order_fulfilled():
         print("No customer phone found. WhatsApp not sent.")
         return "OK", 200
 
-    # DB-level dedup: have we already sent a fulfillment template for this order?
+    # DB-level dedup: have we already sent a fulfillment template for THIS
+    # order? Scoped by raw_payload->>order_number — "conversations" rows are
+    # reused across a customer's repeat orders (keyed by phone, not order),
+    # so without this, an order_dispatched message logged for a customer's
+    # earlier order would make a genuinely new order's dispatch look like a
+    # duplicate and get silently skipped.
     existing_conversation = (
         supabase.table("conversations")
         .select("id")
@@ -1237,6 +1247,7 @@ def order_fulfilled():
             .select("id")
             .eq("conversation_id", existing_conversation.data[0]["id"])
             .eq("template_name", FULFILLMENT_TEMPLATE_NAME)
+            .eq("raw_payload->>order_number", extracted["order_number"])
             .limit(1)
             .execute()
         )
