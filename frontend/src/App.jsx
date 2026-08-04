@@ -86,6 +86,12 @@ export default function App() {
     c.last_template === 'confirmation' || c.last_template === 'bank_pending'
   const isConfirmed = (c) =>
     c.last_template === 'confirmed' || c.last_template === 'paid'
+  // Bank deposit orders, paid or not — a cross-cutting view over the same
+  // last_template values already counted under Pending ('bank_pending') and
+  // Confirmed ('paid'), so this doesn't change those counts, just adds a
+  // dedicated way to see all bank-deposit orders in one place.
+  const isBankDeposit = (c) =>
+    c.last_template === 'bank_pending' || c.last_template === 'paid'
 
   // Counts driven by the unfiltered list so the pill badges always reflect
   // reality even when the user is mid-search.
@@ -104,19 +110,31 @@ export default function App() {
       if (isPending(c)) acc.pending += 1
       else if (isConfirmed(c)) acc.confirmed += 1
       else if (c.last_template === 'fulfilled') acc.fulfilled += 1
+      if (isBankDeposit(c)) acc.bankdeposit += 1
       return acc
     },
-    { all: 0, unread: 0, pending: 0, confirmed: 0, fulfilled: 0, cancelled: 0, notwa: 0 }
+    { all: 0, unread: 0, pending: 0, confirmed: 0, fulfilled: 0, cancelled: 0, notwa: 0, bankdeposit: 0 }
   )
 
   const filteredConversations = conversations.filter((conv) => {
+    const isSearching = !!searchTerm
+
     if (filter === 'cancelled') {
       if (!conv.is_cancelled) return false
     } else if (filter === 'notwa') {
       if (conv.is_cancelled) return false
       if (!conv.is_not_on_whatsapp) return false
-    } else {
+    } else if (filter === 'bankdeposit') {
       if (conv.is_cancelled) return false
+      if (!isBankDeposit(conv)) return false
+    } else {
+      // While actively searching under "All", surface cancelled orders too
+      // so a known order number/name/phone is always findable regardless
+      // of status — otherwise a cancelled order silently disappears from
+      // search unless you happen to already know to check the Cancelled
+      // tab. Outside of search, cancelled stays out of All/Unread/Pending/
+      // Confirmed/Fulfilled — it keeps its own dedicated tab.
+      if (conv.is_cancelled && !(filter === 'all' && isSearching)) return false
       // Customers we can't reach via WhatsApp shouldn't pollute the
       // action-required filters; they live only in 'all' + 'notwa'.
       if (

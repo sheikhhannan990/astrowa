@@ -69,6 +69,7 @@ const FILTERS = [
   { id: 'unread', label: 'Unread' },
   { id: 'confirmed', label: 'Confirmed' },
   { id: 'pending', label: 'Pending' },
+  { id: 'bankdeposit', label: 'Bank Deposit' },
   { id: 'fulfilled', label: 'Fulfilled' },
   { id: 'cancelled', label: 'Cancelled' },
   { id: 'notwa', label: 'Not on WhatsApp' },
@@ -268,6 +269,7 @@ export default function ConversationList({
     if (filter === 'cancelled') return 'No cancelled conversations'
     if (filter === 'unread') return 'No unread conversations'
     if (filter === 'pending') return 'No conversations awaiting customer reply'
+    if (filter === 'bankdeposit') return 'No bank deposit orders'
     if (filter === 'confirmed') return 'No confirmed orders ready to ship'
     if (filter === 'fulfilled') return 'No fulfilled conversations'
     if (filter === 'notwa') return 'No customers flagged as Not on WhatsApp'
