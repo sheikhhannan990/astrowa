@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase } from './utils/supabaseClient'
+import { supabase, fetchAllRows } from './utils/supabaseClient'
 import ConversationList from './components/ConversationList'
 import ChatWindow from './components/ChatWindow'
 import './App.css'
@@ -10,8 +10,8 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
-  // Filter pills: 'all' | 'confirmation' | 'fulfilled' | 'cancelled'.
-  // 'all' excludes cancelled chats (archive-style); 'cancelled' shows only them.
+  // Filter pills: 'all' | 'unread' | 'pending' | 'confirmed' | ... | 'cancelled'.
+  // 'all' shows every chat including cancelled ones; 'cancelled' shows only them.
   const [filter, setFilter] = useState('all')
   const [isMobileView, setIsMobileView] = useState(
     typeof window !== 'undefined' && window.innerWidth < 900
@@ -49,14 +49,17 @@ export default function App() {
   async function fetchConversations() {
     try {
       setLoading(true)
-      const { data, error: err } = await supabase
-        .from('conversations')
-        .select('*')
-        .order('last_message_at', { ascending: false })
+      // Supabase returns at most 1000 rows per request, so page through
+      // up to MAX_ROWS (2000) conversations — newest first.
+      const data = await fetchAllRows((from, to) =>
+        supabase
+          .from('conversations')
+          .select('*')
+          .order('last_message_at', { ascending: false })
+          .range(from, to)
+      )
 
-      if (err) throw err
-
-      setConversations(data || [])
+      setConversations(data)
       setError(null)
     } catch (err) {
       console.error('Failed to fetch conversations:', err)
@@ -97,11 +100,11 @@ export default function App() {
   // reality even when the user is mid-search.
   const counts = conversations.reduce(
     (acc, c) => {
+      acc.all += 1
       if (c.is_cancelled) {
         acc.cancelled += 1
         return acc
       }
-      acc.all += 1
       if (c.is_not_on_whatsapp) {
         acc.notwa += 1
         return acc
@@ -117,9 +120,11 @@ export default function App() {
   )
 
   const filteredConversations = conversations.filter((conv) => {
-    const isSearching = !!searchTerm
-
-    if (filter === 'cancelled') {
+    if (filter === 'all') {
+      // All really means all — cancelled chats stay visible here (tagged
+      // "Cancelled") so a customer who cancels doesn't vanish from the main
+      // list. The Cancelled tab still exists to see only those.
+    } else if (filter === 'cancelled') {
       if (!conv.is_cancelled) return false
     } else if (filter === 'notwa') {
       if (conv.is_cancelled) return false
@@ -128,13 +133,9 @@ export default function App() {
       if (conv.is_cancelled) return false
       if (!isBankDeposit(conv)) return false
     } else {
-      // While actively searching under "All", surface cancelled orders too
-      // so a known order number/name/phone is always findable regardless
-      // of status — otherwise a cancelled order silently disappears from
-      // search unless you happen to already know to check the Cancelled
-      // tab. Outside of search, cancelled stays out of All/Unread/Pending/
-      // Confirmed/Fulfilled — it keeps its own dedicated tab.
-      if (conv.is_cancelled && !(filter === 'all' && isSearching)) return false
+      // Cancelled stays out of the action-oriented tabs
+      // (Unread/Pending/Confirmed/Fulfilled).
+      if (conv.is_cancelled) return false
       // Customers we can't reach via WhatsApp shouldn't pollute the
       // action-required filters; they live only in 'all' + 'notwa'.
       if (

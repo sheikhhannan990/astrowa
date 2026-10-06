@@ -8,6 +8,9 @@ import sys
 import threading
 import time
 import mimetypes
+import shutil
+import subprocess
+import tempfile
 import requests
 from supabase import create_client
 
@@ -692,6 +695,67 @@ def get_or_create_conversation(customer, phone, customer_name=None, order_id=Non
     return created.data[0]
 
 
+def record_customer_order(phone, order_number, shopify_order_id=None, shopify_orders_count=None):
+    """Remember that `phone` placed `order_number` and return how many orders
+    this customer has placed in total (including this one).
+
+    Orders are stored in the customer_orders table (unique on phone +
+    order_number) so Shopify webhook retries don't double-count. Shopify's
+    own customer.orders_count, when the payload carries it, is used as a
+    floor so customers who ordered before this inbox existed still show
+    their real history.
+
+    Never raises — the order-count badge is a nice-to-have and must not
+    block the confirmation template. Returns None if nothing could be
+    determined (e.g. the customer_orders table hasn't been created yet)."""
+    phone = format_phone(phone)
+    if not phone or not order_number:
+        return None
+
+    db_count = None
+    try:
+        supabase.table("customer_orders").upsert(
+            {
+                "phone": phone,
+                "order_number": str(order_number),
+                "shopify_order_id": str(shopify_order_id) if shopify_order_id else None,
+            },
+            on_conflict="phone,order_number",
+            ignore_duplicates=True,
+        ).execute()
+        counted = (
+            supabase.table("customer_orders")
+            .select("id", count="exact")
+            .eq("phone", phone)
+            .execute()
+        )
+        db_count = counted.count
+    except Exception as e:
+        log.warning(f"record_customer_order failed (is the customer_orders table created?): {e}")
+
+    try:
+        shopify_count = int(shopify_orders_count) if shopify_orders_count is not None else None
+    except (TypeError, ValueError):
+        shopify_count = None
+
+    candidates = [c for c in (db_count, shopify_count) if c]
+    return max(candidates) if candidates else None
+
+
+def set_conversation_order_count(conversation_id, order_count):
+    """Store the customer's order count on the conversation. Kept separate
+    from the main conversation update so a missing `order_count` column
+    can't break message logging."""
+    if not conversation_id or not order_count:
+        return
+    try:
+        supabase.table("conversations").update(
+            {"order_count": order_count}
+        ).eq("id", conversation_id).execute()
+    except Exception as e:
+        log.warning(f"Could not save order_count on conversation {conversation_id}: {e}")
+
+
 def log_outgoing_order_message(data, whatsapp_message_id):
     phone = format_phone(data["customer_phone"])
 
@@ -1142,6 +1206,16 @@ def order_created():
         print("No customer phone found. WhatsApp not sent.")
         return "OK", 200
 
+    # How many orders has this customer (by phone) placed, this one included?
+    # Shown in the inbox's Shipping address panel ("1st order", "2nd order"…).
+    order_count = record_customer_order(
+        phone,
+        extracted["order_number"],
+        shopify_order_id=shopify_order_id,
+        shopify_orders_count=(order.get("customer") or {}).get("orders_count"),
+    )
+    print(f"Customer order count: {order_count}")
+
     existing_conversation = (
         supabase.table("conversations")
         .select("id")
@@ -1175,13 +1249,15 @@ def order_created():
     if use_bank_template:
         whatsapp_message_id = send_whatsapp_bank_deposit(extracted)
         if whatsapp_message_id:
-            log_outgoing_bank_deposit_message(extracted, whatsapp_message_id)
+            conversation_id = log_outgoing_bank_deposit_message(extracted, whatsapp_message_id)
+            set_conversation_order_count(conversation_id, order_count)
         else:
             print("WhatsApp bank-deposit template failed. Not logged as outgoing message.")
     else:
         whatsapp_message_id = send_whatsapp_confirmation(extracted)
         if whatsapp_message_id:
-            log_outgoing_order_message(extracted, whatsapp_message_id)
+            conversation_id = log_outgoing_order_message(extracted, whatsapp_message_id)
+            set_conversation_order_count(conversation_id, order_count)
         else:
             print("WhatsApp confirmation failed. Not logged as outgoing message.")
 
@@ -1315,6 +1391,22 @@ def whatsapp_webhook():
 # SEND CUSTOM MESSAGE
 # =========================
 
+def _meta_error_text(response):
+    """Surface Meta's actual error message so the frontend can show
+    something useful instead of a generic 'Failed to send'."""
+    try:
+        err = (response.json() or {}).get("error") or {}
+        code = err.get("code")
+        details = (err.get("error_data") or {}).get("details") or ""
+        return " | ".join(p for p in [
+            f"#{code}" if code is not None else "",
+            err.get("message") or "",
+            details,
+        ] if p) or response.text
+    except Exception:
+        return response.text
+
+
 @app.route("/send-message", methods=["POST", "OPTIONS"])
 def send_message():
     """Send a free-form text reply from the inbox.
@@ -1374,23 +1466,7 @@ def send_message():
     log.info(f"SEND-MESSAGE Meta response status={response.status_code} body={response.text[:400]}")
 
     if response.status_code not in (200, 201):
-        # Try to surface Meta's actual error message so the frontend can
-        # show something useful instead of a generic 'Failed to send'.
-        meta_error = response.text
-        try:
-            parsed = response.json()
-            err = parsed.get("error") or {}
-            msg = err.get("message") or ""
-            code = err.get("code")
-            details = err.get("error_data", {}).get("details") or ""
-            meta_error = " | ".join(p for p in [
-                f"#{code}" if code is not None else "",
-                msg,
-                details,
-            ] if p) or response.text
-        except Exception:
-            pass
-        return jsonify({"success": False, "error": meta_error}), 400
+        return jsonify({"success": False, "error": _meta_error_text(response)}), 400
 
     try:
         result = response.json()
@@ -1424,6 +1500,335 @@ def send_message():
         "success": True,
         "whatsapp_message_id": whatsapp_message_id,
     }), 200
+
+
+# =========================
+# SEND MEDIA (images, videos, voice notes, documents)
+# =========================
+
+# What the WhatsApp Cloud API accepts per message type, and the max size.
+# Anything outside these lists is either converted (voice notes → OGG/Opus)
+# or sent as a document so the customer still receives the file.
+_WA_MEDIA_RULES = {
+    "image": ({"image/jpeg", "image/png"}, 5 * 1024 * 1024),
+    "video": ({"video/mp4", "video/3gpp"}, 16 * 1024 * 1024),
+    "audio": ({"audio/aac", "audio/mp4", "audio/mpeg", "audio/amr", "audio/ogg"}, 16 * 1024 * 1024),
+    "document": (None, 100 * 1024 * 1024),
+}
+
+
+def _convert_to_ogg_opus(content):
+    """Transcode audio bytes to OGG/Opus with ffmpeg — the format WhatsApp
+    renders as a voice note. Browsers like Chrome record WebM, which
+    WhatsApp rejects. Returns the new bytes, or None if ffmpeg is missing
+    or the conversion fails."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        log.warning("ffmpeg not found; cannot convert voice note to OGG/Opus")
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "in")
+        dst = os.path.join(tmp, "out.ogg")
+        with open(src, "wb") as f:
+            f.write(content)
+        try:
+            result = subprocess.run(
+                [ffmpeg, "-y", "-loglevel", "error", "-i", src, "-vn",
+                 "-c:a", "libopus", "-b:a", "32k", "-ac", "1", "-ar", "48000", dst],
+                capture_output=True,
+                timeout=60,
+            )
+        except (subprocess.TimeoutExpired, OSError) as e:
+            log.error(f"ffmpeg conversion error: {e}")
+            return None
+        if result.returncode != 0 or not os.path.exists(dst):
+            log.error(f"ffmpeg conversion failed: {result.stderr.decode(errors='ignore')[:300]}")
+            return None
+        with open(dst, "rb") as f:
+            return f.read()
+
+
+def _upload_media_to_whatsapp(content, mime_type, filename):
+    """Upload bytes to WhatsApp's media store. Returns (media_id, error)."""
+    try:
+        resp = requests.post(
+            f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/media",
+            headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"},
+            data={"messaging_product": "whatsapp", "type": mime_type},
+            files={"file": (filename, content, mime_type)},
+            timeout=60,
+        )
+    except requests.exceptions.RequestException as e:
+        return None, f"Could not reach WhatsApp API: {type(e).__name__}"
+    log.info(f"SEND-MEDIA upload status={resp.status_code} body={resp.text[:300]}")
+    if resp.status_code not in (200, 201):
+        return None, _meta_error_text(resp)
+    media_id = (resp.json() or {}).get("id")
+    if not media_id:
+        return None, "WhatsApp did not return a media id"
+    return media_id, None
+
+
+@app.route("/send-media", methods=["POST", "OPTIONS"])
+def send_media():
+    """Send an image, video, voice note or document from the inbox.
+
+    multipart/form-data fields:
+        file             the attachment (required)
+        phone            customer phone (required)
+        conversation_id  (required)
+        caption          optional — shown under images, videos, documents
+        voice            "1" when the file is a voice note recorded in the inbox
+
+    Like free-form text, this only works inside the 24-hour window after
+    the customer last messaged us."""
+    if request.method == "OPTIONS":
+        return "", 204
+
+    upload = request.files.get("file")
+    phone = format_phone(request.form.get("phone"))
+    conversation_id = request.form.get("conversation_id")
+    caption = (request.form.get("caption") or "").strip()
+    is_voice = request.form.get("voice") == "1"
+
+    if not upload or not phone or not conversation_id:
+        return jsonify({
+            "success": False,
+            "error": "file, phone and conversation_id are required",
+        }), 400
+
+    content = upload.read()
+    if not content:
+        return jsonify({"success": False, "error": "The file is empty"}), 400
+    mime = (upload.mimetype or mimetypes.guess_type(upload.filename or "")[0] or "application/octet-stream")
+    mime = mime.split(";")[0].strip().lower()
+    filename = upload.filename or f"attachment{_ext_for_mime(mime)}"
+
+    kind = mime.split("/")[0]
+    if kind not in ("image", "video", "audio"):
+        kind = "document"
+
+    if kind == "audio":
+        allowed = _WA_MEDIA_RULES["audio"][0]
+        # Always prefer OGG/Opus for voice notes so WhatsApp shows them as a
+        # playable voice message. Other audio is converted only if needed.
+        if (is_voice and mime != "audio/ogg") or mime not in allowed:
+            converted = _convert_to_ogg_opus(content)
+            if converted:
+                content, mime = converted, "audio/ogg"
+                filename = os.path.splitext(filename)[0] + ".ogg"
+            elif mime not in allowed:
+                return jsonify({
+                    "success": False,
+                    "error": f"WhatsApp doesn't accept {mime} audio and it couldn't be converted "
+                             f"(ffmpeg unavailable). Try recording in Safari/Firefox or send an MP3.",
+                }), 400
+    elif kind in ("image", "video") and mime not in _WA_MEDIA_RULES[kind][0]:
+        # e.g. WebP/HEIC images or WebM/MOV videos — WhatsApp won't render
+        # them inline, but they still go through as a downloadable file.
+        kind = "document"
+
+    max_bytes = _WA_MEDIA_RULES[kind][1]
+    if len(content) > max_bytes:
+        return jsonify({
+            "success": False,
+            "error": f"File is too large for a WhatsApp {kind} "
+                     f"({len(content) / 1048576:.1f} MB, max {max_bytes // 1048576} MB)",
+        }), 400
+
+    log.info(f"SEND-MEDIA kind={kind} mime={mime} size={len(content)} phone={phone[-4:]}")
+
+    media_id, err = _upload_media_to_whatsapp(content, mime, filename)
+    if err:
+        return jsonify({"success": False, "error": err}), 400
+
+    media_obj = {"id": media_id}
+    if caption and kind in ("image", "video", "document"):
+        media_obj["caption"] = caption
+    if kind == "document":
+        media_obj["filename"] = filename
+
+    try:
+        response = requests.post(
+            f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages",
+            headers={
+                "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "messaging_product": "whatsapp",
+                "to": phone,
+                "type": kind,
+                kind: media_obj,
+            },
+            timeout=20,
+        )
+    except requests.exceptions.RequestException as e:
+        log.error(f"SEND-MEDIA network error: {type(e).__name__}: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"Could not reach WhatsApp API: {type(e).__name__}",
+        }), 502
+
+    log.info(f"SEND-MEDIA send status={response.status_code} body={response.text[:300]}")
+    if response.status_code not in (200, 201):
+        return jsonify({"success": False, "error": _meta_error_text(response)}), 400
+
+    try:
+        result = response.json()
+    except Exception:
+        result = {}
+    whatsapp_message_id = (result.get("messages") or [{}])[0].get("id")
+
+    # Keep our own copy in Supabase Storage so the inbox can render it.
+    media_url = upload_media_to_storage(kind, media_id, content, mime)
+    message_type = "audio" if kind == "audio" else kind
+    preview = caption or (filename if kind == "document" else _MEDIA_TYPE_ICONS.get(message_type, "📎 Attachment"))
+
+    try:
+        supabase.table("messages").insert({
+            "conversation_id": conversation_id,
+            "whatsapp_message_id": whatsapp_message_id,
+            "direction": "outgoing",
+            "type": message_type,
+            "body": preview,
+            "media_url": media_url,
+            "media_mime_type": mime,
+            "status": "sent",
+            "raw_payload": result,
+        }).execute()
+        supabase.table("conversations").update({
+            "last_message": preview,
+            "last_message_at": "now()",
+            "unread_count": 0,
+            "updated_at": "now()",
+        }).eq("id", conversation_id).execute()
+    except Exception as e:
+        log.error(f"SEND-MEDIA DB log failed (media was already sent): {e}")
+
+    return jsonify({
+        "success": True,
+        "whatsapp_message_id": whatsapp_message_id,
+        "media_url": media_url,
+    }), 200
+
+
+# =========================
+# QUICK REPLIES (saved messages for the inbox composer)
+# =========================
+
+# Shown when the quick_replies table hasn't been created yet, so the
+# feature works out of the box. The same messages are seeded by
+# sql/2026_10_quick_replies_and_order_count.sql.
+_DEFAULT_QUICK_REPLIES = [
+    {
+        "title": "Please wait",
+        "body": "Thank you for reaching out to AstroLamps! ✨ A member of our team will get back to you shortly. We appreciate your patience.",
+    },
+    {
+        "title": "Payment received",
+        "body": "Thank you! We've received your payment and your order has been marked as paid. ✅\n\nIt will be delivered within 3–4 working days, InshaAllah. We appreciate your trust in AstroLamps.",
+    },
+    {
+        "title": "Advance payment (refused order)",
+        "body": "We noticed that your previous order was not received at the time of delivery. To process this new order, we kindly require an advance payment of PKR 200.\n\nBank details:\nAccount Title: ABDUL HANNAN\nBank: Askari Bank Limited, Lahore\nAccount Number: 01410320215569\nIBAN: PK75ASCM0001410320215569\n\nKindly share the transaction screenshot here once the payment is done. Thank you for your understanding.",
+    },
+    {
+        "title": "Bank details",
+        "body": "Please find our bank details below:\n\nAccount Title: ABDUL HANNAN\nBank: Askari Bank Limited, Lahore\nAccount Number: 01410320215569\nIBAN: PK75ASCM0001410320215569\n\nKindly share a screenshot here once the payment has been made.",
+    },
+    {
+        "title": "Refund & warranty policy",
+        "body": "All AstroLamps lamps come with a 30-day refund policy and a 1-year replacement warranty, so you can order with complete peace of mind. 🛡️\n\nIf you face any issue with your product, please don't hesitate to reach out. Our team is always here to help.",
+    },
+]
+
+
+def _clean_quick_reply(data):
+    title = (data.get("title") or "").strip()[:80]
+    body = (data.get("body") or "").strip()[:4096]
+    return title, body
+
+
+@app.route("/quick-replies", methods=["GET", "POST", "OPTIONS"])
+def quick_replies():
+    if request.method == "OPTIONS":
+        return "", 204
+
+    if request.method == "GET":
+        try:
+            rows = (
+                supabase.table("quick_replies")
+                .select("*")
+                .order("sort_order")
+                .order("created_at")
+                .execute()
+            )
+            return jsonify({"success": True, "persisted": True, "quick_replies": rows.data or []}), 200
+        except Exception as e:
+            log.warning(f"quick_replies table unavailable, serving defaults: {e}")
+            defaults = [
+                {"id": f"default-{i}", **qr} for i, qr in enumerate(_DEFAULT_QUICK_REPLIES, 1)
+            ]
+            return jsonify({"success": True, "persisted": False, "quick_replies": defaults}), 200
+
+    title, body = _clean_quick_reply(request.get_json(silent=True) or {})
+    if not title or not body:
+        return jsonify({"success": False, "error": "title and body are required"}), 400
+    try:
+        last = (
+            supabase.table("quick_replies")
+            .select("sort_order")
+            .order("sort_order", desc=True)
+            .limit(1)
+            .execute()
+        )
+        next_order = ((last.data or [{}])[0].get("sort_order") or 0) + 1
+        created = supabase.table("quick_replies").insert({
+            "title": title,
+            "body": body,
+            "sort_order": next_order,
+        }).execute()
+    except Exception as e:
+        log.error(f"quick_replies insert failed: {e}")
+        return jsonify({
+            "success": False,
+            "error": "Could not save. Make sure the quick_replies table exists in Supabase "
+                     "(run sql/2026_10_quick_replies_and_order_count.sql).",
+        }), 500
+    return jsonify({"success": True, "quick_reply": (created.data or [None])[0]}), 201
+
+
+@app.route("/quick-replies/<reply_id>", methods=["PUT", "DELETE", "OPTIONS"])
+def quick_reply_item(reply_id):
+    if request.method == "OPTIONS":
+        return "", 204
+    try:
+        if request.method == "DELETE":
+            deleted = supabase.table("quick_replies").delete().eq("id", reply_id).execute()
+            if not deleted.data:
+                return jsonify({"success": False, "error": "quick reply not found"}), 404
+            return jsonify({"success": True}), 200
+
+        title, body = _clean_quick_reply(request.get_json(silent=True) or {})
+        if not title or not body:
+            return jsonify({"success": False, "error": "title and body are required"}), 400
+        updated = (
+            supabase.table("quick_replies")
+            .update({"title": title, "body": body})
+            .eq("id", reply_id)
+            .execute()
+        )
+    except Exception as e:
+        log.error(f"quick_replies {request.method} failed for {reply_id}: {e}")
+        return jsonify({
+            "success": False,
+            "error": "Could not save. Make sure the quick_replies table exists in Supabase "
+                     "(run sql/2026_10_quick_replies_and_order_count.sql).",
+        }), 500
+    if not updated.data:
+        return jsonify({"success": False, "error": "quick reply not found"}), 404
+    return jsonify({"success": True, "quick_reply": updated.data[0]}), 200
 
 
 # =========================

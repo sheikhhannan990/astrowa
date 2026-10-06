@@ -69,4 +69,50 @@ export async function deleteConversationsBulk(conversationIds) {
   }
 }
 
+// Send an image / video / voice note / document. `file` can be a File from
+// an <input type="file"> or a Blob from the voice recorder. Set voice=true
+// for recorded voice notes so the backend converts them to OGG/Opus (the
+// format WhatsApp shows as a playable voice message).
+export async function sendMedia({ phone, conversationId, file, filename, caption, voice }) {
+  const form = new FormData()
+  form.append('file', file, filename || file.name || 'attachment')
+  form.append('phone', phone)
+  form.append('conversation_id', conversationId)
+  if (caption) form.append('caption', caption)
+  if (voice) form.append('voice', '1')
+  try {
+    const response = await apiClient.post('/send-media', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      // Videos can take a while to upload to WhatsApp on slow links.
+      timeout: 120000,
+    })
+    return response.data
+  } catch (error) {
+    console.error('Failed to send media:', error)
+    throw error
+  }
+}
+
+// ---------- Quick replies (saved messages) ----------
+
+export async function listQuickReplies() {
+  const response = await apiClient.get('/quick-replies')
+  return response.data
+}
+
+export async function createQuickReply(title, body) {
+  const response = await apiClient.post('/quick-replies', { title, body })
+  return response.data
+}
+
+export async function updateQuickReply(id, title, body) {
+  const response = await apiClient.put(`/quick-replies/${id}`, { title, body })
+  return response.data
+}
+
+export async function deleteQuickReply(id) {
+  const response = await apiClient.delete(`/quick-replies/${id}`)
+  return response.data
+}
+
 export default apiClient
