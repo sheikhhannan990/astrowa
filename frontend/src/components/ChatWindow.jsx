@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { supabase } from '../utils/supabaseClient'
+import { supabase, fetchAllRows } from '../utils/supabaseClient'
 import MessageBubbles from './MessageBubbles'
 import ReplyInput from './ReplyInput'
 import './ChatWindow.css'
@@ -111,15 +111,18 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
   async function fetchMessages() {
     try {
       setLoading(true)
-      const { data, error: err } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('conversation_id', conversation.id)
-        .order('created_at', { ascending: true })
+      // Load the newest messages first (up to 2000, paging past Supabase's
+      // 1000-row cap) and flip them so the chat reads oldest → newest.
+      const data = await fetchAllRows((from, to) =>
+        supabase
+          .from('messages')
+          .select('*')
+          .eq('conversation_id', conversation.id)
+          .order('created_at', { ascending: false })
+          .range(from, to)
+      )
 
-      if (err) throw err
-
-      setMessages(data || [])
+      setMessages(data.reverse())
       setError(null)
     } catch (err) {
       console.error('Failed to fetch messages:', err)
@@ -156,6 +159,9 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
     Object.keys(shippingAddress).length > 0
   )
   const addressText = hasAddress ? formatAddress(shippingAddress) : ''
+  // Total orders this phone number has placed (set by the order-created
+  // webhook). Null for chats that predate the feature / have no order.
+  const orderCount = Number(conversation.order_count) || 0
 
   async function copyAddress() {
     if (!addressText) return
@@ -247,6 +253,19 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
                       {addressCopied ? 'Copied' : 'Copy'}
                     </button>
                   </div>
+                  {orderCount > 0 && (
+                    <div className="cw-order-count">
+                      <span className="cw-order-count-label">Orders placed</span>
+                      <span className="cw-order-count-value">{orderCount}</span>
+                      <span
+                        className={`cw-order-count-tag ${
+                          orderCount > 1 ? 'is-returning' : 'is-first'
+                        }`}
+                      >
+                        {orderCount > 1 ? 'Returning customer' : 'First order'}
+                      </span>
+                    </div>
+                  )}
                   <div className="cw-address-body">
                     {shippingAddress.name && (
                       <div className="cw-address-line cw-address-name">

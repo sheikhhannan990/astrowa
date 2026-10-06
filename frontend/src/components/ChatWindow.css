@@ -279,6 +279,54 @@
   margin-top: 4px;
 }
 
+/* Order count row at the top of the Shipping address panel. */
+.cw-order-count {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--wa-panel-border);
+  font-size: 13px;
+}
+
+.cw-order-count-label {
+  color: #54656f;
+  white-space: nowrap;
+}
+
+.cw-order-count-value {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background-color: #111b21;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 12.5px;
+}
+
+.cw-order-count-tag {
+  margin-left: auto;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.cw-order-count-tag.is-first {
+  background-color: rgba(0, 168, 132, 0.12);
+  color: #008069;
+}
+
+.cw-order-count-tag.is-returning {
+  background-color: #fff3c4;
+  color: #8a6100;
+}
+
 /* ---------- Messages area ---------- */
 .cw-messages {
   flex: 1;

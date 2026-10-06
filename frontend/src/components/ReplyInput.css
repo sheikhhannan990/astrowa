@@ -1,4 +1,5 @@
 .ri-wrap {
+  position: relative;
   flex-shrink: 0;
   background-color: var(--wa-panel-soft);
   padding: 6px 12px 6px 8px;
@@ -119,16 +120,133 @@
   color: #ffffff;
 }
 
+/* ---------- Quick replies button ---------- */
+.ri-quick.is-active {
+  color: var(--wa-accent-dark);
+  background-color: rgba(0, 168, 132, 0.12);
+}
+
+.ri-icon:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---------- Attachment preview ---------- */
+.ri-attachment {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 4px 6px 4px;
+  padding: 8px 10px;
+  background-color: var(--wa-panel-bg);
+  border: 1px solid var(--wa-panel-border);
+  border-radius: 10px;
+}
+
+.ri-attachment-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 6px;
+  background-color: #000;
+  flex-shrink: 0;
+}
+
+.ri-attachment-icon {
+  width: 48px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  border-radius: 6px;
+  background-color: var(--wa-panel-soft);
+  flex-shrink: 0;
+}
+
+.ri-attachment-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ri-attachment-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--wa-text-primary);
+}
+
+.ri-attachment-meta {
+  font-size: 12px;
+  color: var(--wa-text-secondary);
+}
+
+.ri-attachment-remove {
+  font-size: 22px;
+  line-height: 1;
+  color: #54656f;
+  padding: 0 6px;
+}
+
+/* ---------- Voice recording ---------- */
+.ri-recording {
+  align-items: center;
+}
+
+.ri-record-cancel:hover {
+  color: #c62828;
+}
+
+.ri-record-indicator {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 12px;
+  background-color: var(--wa-panel-bg);
+  border-radius: 8px;
+  color: var(--wa-text-primary);
+}
+
+.ri-record-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: #ea4335;
+  animation: ri-pulse 1s ease-in-out infinite;
+}
+
+@keyframes ri-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.ri-record-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.ri-record-label {
+  font-size: 13px;
+  color: var(--wa-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- Mobile ---------- */
 @media (max-width: 900px) {
   .ri-wrap {
     padding: 6px 6px 6px 4px;
     padding-bottom: calc(6px + env(safe-area-inset-bottom));
-  }
-
-  .ri-attach {
-    /* Save horizontal space on mobile */
-    display: none;
   }
 
   .ri-textarea {
