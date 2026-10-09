@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { supabase, fetchAllRows } from '../utils/supabaseClient'
+import { supabase } from '../utils/supabaseClient'
 import MessageBubbles from './MessageBubbles'
 import ReplyInput from './ReplyInput'
 import './ChatWindow.css'
@@ -111,18 +111,15 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
   async function fetchMessages() {
     try {
       setLoading(true)
-      // Load the newest messages first (up to 2000, paging past Supabase's
-      // 1000-row cap) and flip them so the chat reads oldest → newest.
-      const data = await fetchAllRows((from, to) =>
-        supabase
-          .from('messages')
-          .select('*')
-          .eq('conversation_id', conversation.id)
-          .order('created_at', { ascending: false })
-          .range(from, to)
-      )
+      const { data, error: err } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', conversation.id)
+        .order('created_at', { ascending: true })
 
-      setMessages(data.reverse())
+      if (err) throw err
+
+      setMessages(data || [])
       setError(null)
     } catch (err) {
       console.error('Failed to fetch messages:', err)
