@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase, fetchAllRows } from './utils/supabaseClient'
+import { supabase } from './utils/supabaseClient'
 import ConversationList from './components/ConversationList'
 import ChatWindow from './components/ChatWindow'
 import './App.css'
@@ -49,17 +49,14 @@ export default function App() {
   async function fetchConversations() {
     try {
       setLoading(true)
-      // Supabase returns at most 1000 rows per request, so page through
-      // up to MAX_ROWS (2000) conversations — newest first.
-      const data = await fetchAllRows((from, to) =>
-        supabase
-          .from('conversations')
-          .select('*')
-          .order('last_message_at', { ascending: false })
-          .range(from, to)
-      )
+      const { data, error: err } = await supabase
+        .from('conversations')
+        .select('*')
+        .order('last_message_at', { ascending: false })
 
-      setConversations(data)
+      if (err) throw err
+
+      setConversations(data || [])
       setError(null)
     } catch (err) {
       console.error('Failed to fetch conversations:', err)
