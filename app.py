@@ -182,6 +182,42 @@ def _remember(cache, key):
     cache.add(key)
 
 
+def _is_unique_violation(e):
+    return getattr(e, "code", None) == "23505" or "duplicate key" in str(e).lower()
+
+
+def claim_event(key):
+    """Atomically mark `key` as handled. Returns True for the first caller
+    only, across every PythonAnywhere worker process (the in-memory sets
+    above are per-process, so they can't stop two workers both handling
+    the same webhook retry).
+
+    Backed by the processed_events table's primary key. If the table
+    doesn't exist yet, fail open (return True) so webhooks keep working
+    exactly as before."""
+    if not key:
+        return True
+    try:
+        supabase.table("processed_events").insert({"key": key}).execute()
+        return True
+    except Exception as e:
+        if _is_unique_violation(e):
+            return False
+        log.warning(f"claim_event({key}) failed, processing anyway (is processed_events created?): {e}")
+        return True
+
+
+def release_event(key):
+    """Undo claim_event so a retry can try again. Only used when we failed
+    BEFORE sending anything, so a retry can never double-send."""
+    if not key:
+        return
+    try:
+        supabase.table("processed_events").delete().eq("key", key).execute()
+    except Exception as e:
+        log.warning(f"release_event({key}) failed: {e}")
+
+
 # =========================
 # HELPERS
 # =========================
@@ -978,6 +1014,13 @@ def log_incoming_message(payload, message):
     message_type = message.get("type")
     whatsapp_message_id = message.get("id")
 
+    # Meta re-delivers the same webhook if we're slow to answer (e.g. while
+    # a burst of order templates is going out). Without this, each retry
+    # logged the customer's message again — the 4-5x duplicates.
+    if whatsapp_message_id and not claim_event(f"wa_in:{whatsapp_message_id}"):
+        print(f"Duplicate incoming message {whatsapp_message_id} ignored.")
+        return
+
     media_url = None
     media_mime = None
 
@@ -1018,17 +1061,25 @@ def log_incoming_message(payload, message):
     customer = get_or_create_customer(name=None, phone=phone)
     conversation = get_or_create_conversation(customer=customer, phone=phone)
 
-    supabase.table("messages").insert({
-        "conversation_id": conversation["id"],
-        "whatsapp_message_id": whatsapp_message_id,
-        "direction": "incoming",
-        "type": message_type,
-        "body": body,
-        "media_url": media_url,
-        "media_mime_type": media_mime,
-        "status": "received",
-        "raw_payload": payload,
-    }).execute()
+    try:
+        supabase.table("messages").insert({
+            "conversation_id": conversation["id"],
+            "whatsapp_message_id": whatsapp_message_id,
+            "direction": "incoming",
+            "type": message_type,
+            "body": body,
+            "media_url": media_url,
+            "media_mime_type": media_mime,
+            "status": "received",
+            "raw_payload": payload,
+        }).execute()
+    except Exception as e:
+        # Second line of defence: the unique index on incoming
+        # whatsapp_message_id (see sql/2026_11_webhook_dedup.sql).
+        if _is_unique_violation(e):
+            print(f"Duplicate incoming message {whatsapp_message_id} ignored (unique index).")
+            return
+        raise
 
     unread_count = conversation.get("unread_count") or 0
 
@@ -1109,10 +1160,15 @@ def log_message_status(payload, status_event):
     if not whatsapp_message_id or not status:
         return
 
-    # Retry the lookup — WhatsApp delivers fast and the status webhook can
-    # arrive before log_outgoing_*_message() finishes its Supabase inserts.
+    # The status webhook can arrive before log_outgoing_*_message() has
+    # inserted the row, so retry briefly — but only briefly. These sleeps
+    # used to add up to 3s per status, and with a burst of order templates
+    # (each producing sent/delivered/read) they tied up every PythonAnywhere
+    # worker; Meta then timed out on customers' messages and re-sent them.
+    # 'sent' is skipped outright: rows are inserted with status 'sent'.
+    attempts = 1 if status == "sent" else 3
     message = None
-    for _ in range(6):
+    for attempt in range(attempts):
         message_result = (
             supabase.table("messages")
             .select("id, status, conversation_id")
@@ -1123,7 +1179,8 @@ def log_message_status(payload, status_event):
         if message_result.data:
             message = message_result.data[0]
             break
-        time.sleep(0.5)
+        if attempt < attempts - 1:
+            time.sleep(0.3)
 
     if message is None:
         print(f"Status '{status}' received but message not found after retries: {whatsapp_message_id}")
@@ -1206,6 +1263,23 @@ def order_created():
         print("No customer phone found. WhatsApp not sent.")
         return "OK", 200
 
+    # Cross-worker dedup, claimed BEFORE the (paid) template goes out.
+    # Shopify retries if we take >5s; the DB check below only sees the
+    # message after it's logged, so a retry arriving mid-send used to
+    # send the confirmation template twice.
+    claim_key = f"order_created:{shopify_order_id or extracted['order_number']}:{phone}"
+    if not claim_event(claim_key):
+        print("Order confirmation already claimed by another request. Ignored.")
+        return "Duplicate order ignored", 200
+
+    try:
+        return _handle_order_created(order, extracted, phone, shopify_order_id, use_bank_template)
+    except Exception:
+        release_event(claim_key)
+        raise
+
+
+def _handle_order_created(order, extracted, phone, shopify_order_id, use_bank_template):
     # How many orders has this customer (by phone) placed, this one included?
     # Shown in the inbox's Shipping address panel ("1st order", "2nd order"…).
     order_count = record_customer_order(
@@ -1246,18 +1320,27 @@ def order_created():
             print("Confirmation already sent for this order. Skipping.")
             return "Duplicate ignored", 200
 
+    # Once the template is sent, never let a logging error reach the
+    # caller: a 500 would make Shopify retry, and the retry must not be
+    # able to release the claim and send (and bill) the template again.
     if use_bank_template:
         whatsapp_message_id = send_whatsapp_bank_deposit(extracted)
         if whatsapp_message_id:
-            conversation_id = log_outgoing_bank_deposit_message(extracted, whatsapp_message_id)
-            set_conversation_order_count(conversation_id, order_count)
+            try:
+                conversation_id = log_outgoing_bank_deposit_message(extracted, whatsapp_message_id)
+                set_conversation_order_count(conversation_id, order_count)
+            except Exception as e:
+                log.exception(f"Bank-deposit template sent but logging failed: {e}")
         else:
             print("WhatsApp bank-deposit template failed. Not logged as outgoing message.")
     else:
         whatsapp_message_id = send_whatsapp_confirmation(extracted)
         if whatsapp_message_id:
-            conversation_id = log_outgoing_order_message(extracted, whatsapp_message_id)
-            set_conversation_order_count(conversation_id, order_count)
+            try:
+                conversation_id = log_outgoing_order_message(extracted, whatsapp_message_id)
+                set_conversation_order_count(conversation_id, order_count)
+            except Exception as e:
+                log.exception(f"Confirmation template sent but logging failed: {e}")
         else:
             print("WhatsApp confirmation failed. Not logged as outgoing message.")
 
@@ -1303,6 +1386,20 @@ def order_fulfilled():
         print("No customer phone found. WhatsApp not sent.")
         return "OK", 200
 
+    # Cross-worker dedup claimed before the template goes out (see order_created).
+    claim_key = f"order_fulfilled:{shopify_order_id or extracted['order_number']}:{latest_fulfillment_id}:{phone}"
+    if not claim_event(claim_key):
+        print("Fulfillment notice already claimed by another request. Ignored.")
+        return "Duplicate fulfillment ignored", 200
+
+    try:
+        return _handle_order_fulfilled(extracted, phone)
+    except Exception:
+        release_event(claim_key)
+        raise
+
+
+def _handle_order_fulfilled(extracted, phone):
     # DB-level dedup: have we already sent a fulfillment template for THIS
     # order? Scoped by raw_payload->>order_number — "conversations" rows are
     # reused across a customer's repeat orders (keyed by phone, not order),
@@ -1334,7 +1431,11 @@ def order_fulfilled():
     whatsapp_message_id = send_whatsapp_fulfillment(extracted)
 
     if whatsapp_message_id:
-        log_outgoing_fulfillment_message(extracted, whatsapp_message_id)
+        # Never 500 after a successful send (see order_created).
+        try:
+            log_outgoing_fulfillment_message(extracted, whatsapp_message_id)
+        except Exception as e:
+            log.exception(f"Fulfillment template sent but logging failed: {e}")
     else:
         print("WhatsApp fulfillment failed. Not logged as outgoing message.")
 

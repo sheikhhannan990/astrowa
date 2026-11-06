@@ -4,6 +4,27 @@ import ConversationList from './components/ConversationList'
 import ChatWindow from './components/ChatWindow'
 import './App.css'
 
+function byLastMessageDesc(a, b) {
+  const ta = a.last_message_at ? Date.parse(a.last_message_at) : 0
+  const tb = b.last_message_at ? Date.parse(b.last_message_at) : 0
+  return tb - ta
+}
+
+// Merge one realtime postgres_changes event into the list.
+function applyConversationChange(list, payload) {
+  if (payload.eventType === 'DELETE') {
+    const id = payload.old?.id
+    return id ? list.filter((c) => c.id !== id) : list
+  }
+  const row = payload.new
+  if (!row?.id) return list
+  const exists = list.some((c) => c.id === row.id)
+  const next = exists
+    ? list.map((c) => (c.id === row.id ? { ...c, ...row } : c))
+    : [row, ...list]
+  return next.sort(byLastMessageDesc)
+}
+
 export default function App() {
   const [conversations, setConversations] = useState([])
   const [selectedConversationId, setSelectedConversationId] = useState(null)
@@ -28,27 +49,34 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  // Keep the conversation list in sync with realtime DB changes.
+  // Keep the conversation list in sync with realtime DB changes. Apply the
+  // changed row directly instead of re-downloading the whole list on every
+  // event — that re-download ran for each incoming message, status change
+  // and webhook retry, in every open tab, and is the bulk of Supabase
+  // egress. A full fetch still happens whenever the channel (re)connects,
+  // so nothing is missed after a dropped connection.
   useEffect(() => {
     const subscription = supabase
       .channel('conversations_channel')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'conversations' },
-        () => {
-          fetchConversations()
+        (payload) => {
+          setConversations((prev) => applyConversationChange(prev, payload))
         }
       )
-      .subscribe()
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') fetchConversations({ silent: true })
+      })
 
     return () => {
       supabase.removeChannel(subscription)
     }
   }, [])
 
-  async function fetchConversations() {
+  async function fetchConversations({ silent = false } = {}) {
     try {
-      setLoading(true)
+      if (!silent) setLoading(true)
       const { data, error: err } = await supabase
         .from('conversations')
         .select('*')
@@ -68,6 +96,14 @@ export default function App() {
 
   const handleSelectConversation = (conversation) => {
     setSelectedConversationId(conversation?.id ?? null)
+  }
+
+  // Called by ChatWindow after it marks a chat as read. Patch the row
+  // locally rather than re-downloading every conversation.
+  const handleConversationRead = (conversationId) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === conversationId ? { ...c, unread_count: 0 } : c))
+    )
   }
 
   const handleBackFromChat = () => {
@@ -179,7 +215,7 @@ export default function App() {
             <ChatWindow
               conversation={selectedConversation}
               onBack={handleBackFromChat}
-              onConversationUpdate={fetchConversations}
+              onConversationUpdate={handleConversationRead}
               isMobile
             />
           ) : (
@@ -193,7 +229,7 @@ export default function App() {
             {selectedConversation ? (
               <ChatWindow
                 conversation={selectedConversation}
-                onConversationUpdate={fetchConversations}
+                onConversationUpdate={handleConversationRead}
               />
             ) : (
               <div className="no-selection">

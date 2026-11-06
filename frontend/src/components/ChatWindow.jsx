@@ -142,7 +142,7 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
 
       if (err) throw err
 
-      onConversationUpdate?.()
+      onConversationUpdate?.(conversation.id)
     } catch (err) {
       console.error('Failed to mark conversation as read:', err)
     }
