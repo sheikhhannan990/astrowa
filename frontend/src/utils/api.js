@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { supabase } from './supabaseClient'
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
 
@@ -13,12 +14,23 @@ const apiClient = axios.create({
   },
 })
 
-export async function sendMessage(phone, message, conversationId) {
+// Every request carries the logged-in user's access token; the backend
+// checks it and records who did what.
+apiClient.interceptors.request.use(async (config) => {
+  const { data } = await supabase.auth.getSession()
+  const token = data?.session?.access_token
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+export async function sendMessage(phone, message, conversationId, extra = {}) {
   try {
     const response = await apiClient.post('/send-message', {
       phone,
       message,
       conversation_id: conversationId,
+      quick_reply_id: extra.quickReplyId || undefined,
+      order_id: extra.orderId || undefined,
     })
     return response.data
   } catch (error) {
@@ -100,19 +112,41 @@ export async function listQuickReplies() {
   return response.data
 }
 
-export async function createQuickReply(title, body) {
-  const response = await apiClient.post('/quick-replies', { title, body })
+export async function createQuickReply(title, body, category) {
+  const response = await apiClient.post('/quick-replies', { title, body, category })
   return response.data
 }
 
-export async function updateQuickReply(id, title, body) {
-  const response = await apiClient.put(`/quick-replies/${id}`, { title, body })
+export async function updateQuickReply(id, title, body, category) {
+  const response = await apiClient.put(`/quick-replies/${id}`, { title, body, category })
   return response.data
 }
 
 export async function deleteQuickReply(id) {
   const response = await apiClient.delete(`/quick-replies/${id}`)
   return response.data
+}
+
+// ---------- Team workflow ----------
+
+const post = async (url, body) => (await apiClient.post(url, body)).data
+
+export const getMe = async () => (await apiClient.get('/me')).data
+export const getConfig = async () => (await apiClient.get('/config')).data
+export const orderAction = (orderId, action, body = {}) =>
+  post(`/orders/${orderId}/action`, { action, ...body })
+export const createNote = (body) => post('/notes', body)
+export const deleteNote = async (id) => (await apiClient.delete(`/notes/${id}`)).data
+export const createFollowup = (body) => post('/followups', body)
+export const completeFollowup = (id) => post(`/followups/${id}/done`)
+export const markNoReplyNeeded = (conversationId) => post(`/conversations/${conversationId}/no-reply-needed`)
+export const listTeam = async () => (await apiClient.get('/team')).data
+export const addTeamMember = (body) => post('/team', body)
+export const updateTeamMember = async (userId, body) => (await apiClient.patch(`/team/${userId}`, body)).data
+
+// Readable error text from an axios error.
+export function errorText(err, fallback = 'Something went wrong') {
+  return err?.response?.data?.error || err?.message || fallback
 }
 
 export default apiClient

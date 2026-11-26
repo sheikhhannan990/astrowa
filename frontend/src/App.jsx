@@ -1,272 +1,192 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from './utils/supabaseClient'
-import ConversationList from './components/ConversationList'
-import ChatWindow from './components/ChatWindow'
+import useWorkspaceData from './utils/useWorkspaceData'
+import Inbox from './views/Inbox'
+import Today from './views/Today'
+import Activity from './views/Activity'
+import Team from './views/Team'
+import Login from './views/Login'
 import './App.css'
 
-function byLastMessageDesc(a, b) {
-  const ta = a.last_message_at ? Date.parse(a.last_message_at) : 0
-  const tb = b.last_message_at ? Date.parse(b.last_message_at) : 0
-  return tb - ta
-}
+const NAV = [
+  { id: 'today', label: 'Today', icon: 'M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 16H5V9h14v11zM7 11h5v5H7z' },
+  { id: 'inbox', label: 'Inbox', icon: 'M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z' },
+  { id: 'activity', label: 'Activity', admin: true, icon: 'M3 13h2v8H3zm4-6h2v14H7zm4 3h2v11h-2zm4-7h2v18h-2zm4 9h2v9h-2z' },
+  { id: 'team', label: 'Team', admin: true, icon: 'M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm-8 0a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 2 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5z' },
+]
 
-// Merge one realtime postgres_changes event into the list.
-function applyConversationChange(list, payload) {
-  if (payload.eventType === 'DELETE') {
-    const id = payload.old?.id
-    return id ? list.filter((c) => c.id !== id) : list
-  }
-  const row = payload.new
-  if (!row?.id) return list
-  const exists = list.some((c) => c.id === row.id)
-  const next = exists
-    ? list.map((c) => (c.id === row.id ? { ...c, ...row } : c))
-    : [row, ...list]
-  return next.sort(byLastMessageDesc)
+function Icon({ d }) {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden>
+      <path d={d} />
+    </svg>
+  )
 }
 
 export default function App() {
-  const [conversations, setConversations] = useState([])
-  const [selectedConversationId, setSelectedConversationId] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [searchTerm, setSearchTerm] = useState('')
-  // Filter pills: 'all' | 'unread' | 'pending' | 'confirmed' | ... | 'cancelled'.
-  // 'all' shows every chat including cancelled ones; 'cancelled' shows only them.
-  const [filter, setFilter] = useState('all')
-  const [isMobileView, setIsMobileView] = useState(
-    typeof window !== 'undefined' && window.innerWidth < 900
-  )
+  const [session, setSession] = useState(undefined) // undefined = still checking
+  const [staff, setStaff] = useState(undefined)
+  const [staffError, setStaffError] = useState(null)
 
   useEffect(() => {
-    fetchConversations()
-
-    const handleResize = () => {
-      setIsMobileView(window.innerWidth < 900)
-    }
-
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
+    supabase.auth.getSession().then(({ data }) => setSession(data.session || null))
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s || null))
+    return () => sub.subscription.unsubscribe()
   }, [])
 
-  // Keep the conversation list in sync with realtime DB changes. Apply the
-  // changed row directly instead of re-downloading the whole list on every
-  // event — that re-download ran for each incoming message, status change
-  // and webhook retry, in every open tab, and is the bulk of Supabase
-  // egress. A full fetch still happens whenever the channel (re)connects,
-  // so nothing is missed after a dropped connection.
   useEffect(() => {
-    const subscription = supabase
-      .channel('conversations_channel')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'conversations' },
-        (payload) => {
-          setConversations((prev) => applyConversationChange(prev, payload))
-        }
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') fetchConversations({ silent: true })
+    if (!session) {
+      setStaff(session === null ? null : undefined)
+      return
+    }
+    setStaff(undefined)
+    supabase
+      .from('staff')
+      .select('*')
+      .eq('user_id', session.user.id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error) setStaffError(error.message)
+        setStaff(data && data.active ? data : null)
       })
+  }, [session?.user?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-    return () => {
-      supabase.removeChannel(subscription)
-    }
+  if (session === undefined || (session && staff === undefined)) {
+    return <div className="app-splash">Loading…</div>
+  }
+  if (!session) return <Login />
+  if (!staff) {
+    return (
+      <div className="app-splash">
+        <div className="app-noaccess">
+          <h2>No access</h2>
+          <p>
+            {session.user.email} isn't set up as a team member yet, or their access was switched off.
+            Ask the admin to add you on the Team page.
+          </p>
+          {staffError && <p className="td-small">({staffError})</p>}
+          <button type="button" className="td-btn" onClick={() => supabase.auth.signOut()}>Sign out</button>
+        </div>
+      </div>
+    )
+  }
+  return <Workspace staff={staff} />
+}
+
+function Workspace({ staff }) {
+  const data = useWorkspaceData()
+  const [view, setView] = useState('today')
+  const [selectedConversationId, setSelectedConversationId] = useState(null)
+  const [focusOrderId, setFocusOrderId] = useState(null)
+  const [isMobileView, setIsMobileView] = useState(typeof window !== 'undefined' && window.innerWidth < 900)
+  const isAdmin = staff.role === 'admin'
+
+  useEffect(() => {
+    const onResize = () => setIsMobileView(window.innerWidth < 900)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  async function fetchConversations({ silent = false } = {}) {
-    try {
-      if (!silent) setLoading(true)
-      const { data, error: err } = await supabase
-        .from('conversations')
-        .select('*')
-        .order('last_message_at', { ascending: false })
+  const openChat = useCallback((conversationId, orderId = null) => {
+    if (!conversationId) return
+    setSelectedConversationId(conversationId)
+    setFocusOrderId(orderId)
+    setView('inbox')
+  }, [])
 
-      if (err) throw err
+  useReminderAlerts(data.followups, data.conversations, openChat)
 
-      setConversations(data || [])
-      setError(null)
-    } catch (err) {
-      console.error('Failed to fetch conversations:', err)
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const overdue = data.followups.filter((f) => Date.parse(f.due_at) < Date.now()).length
+  const waiting = data.conversations.filter((c) => c.needs_reply && !c.is_cancelled).length
+  const badges = { today: overdue + waiting, inbox: data.conversations.filter((c) => (c.unread_count || 0) > 0).length }
+  const navItems = NAV.filter((n) => !n.admin || isAdmin)
 
-  const handleSelectConversation = (conversation) => {
-    setSelectedConversationId(conversation?.id ?? null)
-  }
-
-  // Called by ChatWindow after it marks a chat as read. Patch the row
-  // locally rather than re-downloading every conversation.
-  const handleConversationRead = (conversationId) => {
-    setConversations((prev) =>
-      prev.map((c) => (c.id === conversationId ? { ...c, unread_count: 0 } : c))
+  let content
+  if (view === 'today') content = <Today data={data} staff={staff} onOpen={openChat} />
+  else if (view === 'activity' && isAdmin) content = <Activity data={data} onOpen={openChat} />
+  else if (view === 'team' && isAdmin) content = <Team staff={staff} />
+  else {
+    content = (
+      <Inbox
+        data={data}
+        staff={staff}
+        selectedConversationId={selectedConversationId}
+        onSelectConversation={(id) => { setSelectedConversationId(id); setFocusOrderId(null) }}
+        focusOrderId={focusOrderId}
+        isMobileView={isMobileView}
+      />
     )
   }
 
-  const handleBackFromChat = () => {
-    setSelectedConversationId(null)
-  }
-
-  // Always read the latest version of the selected conversation from the
-  // refreshed list so unread_count / last_message stay in sync.
-  const selectedConversation =
-    conversations.find((c) => c.id === selectedConversationId) || null
-
-  // 'pending'   = awaiting customer action (COD confirmation OR bank deposit screenshot)
-  // 'confirmed' = customer has acted (tapped Confirm) or merchant has marked
-  //               bank deposit as paid — i.e. ready for the merchant to ship
-  const isPending = (c) =>
-    c.last_template === 'confirmation' || c.last_template === 'bank_pending'
-  const isConfirmed = (c) =>
-    c.last_template === 'confirmed' || c.last_template === 'paid'
-  // Bank deposit orders, paid or not — a cross-cutting view over the same
-  // last_template values already counted under Pending ('bank_pending') and
-  // Confirmed ('paid'), so this doesn't change those counts, just adds a
-  // dedicated way to see all bank-deposit orders in one place.
-  const isBankDeposit = (c) =>
-    c.last_template === 'bank_pending' || c.last_template === 'paid'
-
-  // Counts driven by the unfiltered list so the pill badges always reflect
-  // reality even when the user is mid-search.
-  const counts = conversations.reduce(
-    (acc, c) => {
-      acc.all += 1
-      if (c.is_cancelled) {
-        acc.cancelled += 1
-        return acc
-      }
-      if (c.is_not_on_whatsapp) {
-        acc.notwa += 1
-        return acc
-      }
-      if ((c.unread_count || 0) > 0) acc.unread += 1
-      if (isPending(c)) acc.pending += 1
-      else if (isConfirmed(c)) acc.confirmed += 1
-      else if (c.last_template === 'fulfilled') acc.fulfilled += 1
-      if (isBankDeposit(c)) acc.bankdeposit += 1
-      return acc
-    },
-    { all: 0, unread: 0, pending: 0, confirmed: 0, fulfilled: 0, cancelled: 0, notwa: 0, bankdeposit: 0 }
-  )
-
-  const filteredConversations = conversations.filter((conv) => {
-    if (filter === 'all') {
-      // All really means all — cancelled chats stay visible here (tagged
-      // "Cancelled") so a customer who cancels doesn't vanish from the main
-      // list. The Cancelled tab still exists to see only those.
-    } else if (filter === 'cancelled') {
-      if (!conv.is_cancelled) return false
-    } else if (filter === 'notwa') {
-      if (conv.is_cancelled) return false
-      if (!conv.is_not_on_whatsapp) return false
-    } else if (filter === 'bankdeposit') {
-      if (conv.is_cancelled) return false
-      if (!isBankDeposit(conv)) return false
-    } else {
-      // Cancelled stays out of the action-oriented tabs
-      // (Unread/Pending/Confirmed/Fulfilled).
-      if (conv.is_cancelled) return false
-      // Customers we can't reach via WhatsApp shouldn't pollute the
-      // action-required filters; they live only in 'all' + 'notwa'.
-      if (
-        conv.is_not_on_whatsapp &&
-        (filter === 'pending' || filter === 'confirmed' || filter === 'unread')
-      ) {
-        return false
-      }
-      if (filter === 'unread' && !((conv.unread_count || 0) > 0)) return false
-      if (filter === 'pending' && !isPending(conv)) return false
-      if (filter === 'confirmed' && !isConfirmed(conv)) return false
-      if (filter === 'fulfilled' && conv.last_template !== 'fulfilled') return false
-    }
-
-    if (!searchTerm) return true
-    const searchLower = searchTerm.toLowerCase()
-    return (
-      (conv.customer_name && conv.customer_name.toLowerCase().includes(searchLower)) ||
-      (conv.phone && conv.phone.includes(searchLower)) ||
-      (conv.order_id && String(conv.order_id).toLowerCase().includes(searchLower))
-    )
-  })
-
-  const list = (
-    <ConversationList
-      conversations={filteredConversations}
-      selectedConversation={selectedConversation}
-      onSelectConversation={handleSelectConversation}
-      loading={loading}
-      error={error}
-      searchTerm={searchTerm}
-      onSearchChange={setSearchTerm}
-      filter={filter}
-      onFilterChange={setFilter}
-      counts={counts}
-    />
-  )
+  // On phones the chat takes the full screen; hide the tab bar there.
+  const hideTabs = isMobileView && view === 'inbox' && selectedConversationId
 
   return (
     <div className="app">
-      {isMobileView ? (
-        <div className="mobile-view">
-          {selectedConversation ? (
-            <ChatWindow
-              conversation={selectedConversation}
-              onBack={handleBackFromChat}
-              onConversationUpdate={handleConversationRead}
-              isMobile
-            />
-          ) : (
-            list
-          )}
-        </div>
-      ) : (
-        <div className="desktop-view">
-          <aside className="sidebar">{list}</aside>
-          <main className="main-content">
-            {selectedConversation ? (
-              <ChatWindow
-                conversation={selectedConversation}
-                onConversationUpdate={handleConversationRead}
-              />
-            ) : (
-              <div className="no-selection">
-                <div className="no-selection-illustration" aria-hidden>
-                  <svg viewBox="0 0 303 172" width="320" height="180">
-                    <defs>
-                      <linearGradient id="lg" x1="0" x2="0" y1="0" y2="1">
-                        <stop offset="0" stopColor="#daf7dc" />
-                        <stop offset="1" stopColor="#b9eac4" />
-                      </linearGradient>
-                    </defs>
-                    <path
-                      fill="url(#lg)"
-                      d="M229.6 9.8c-7-1.2-14.1-1.7-21.1-1.7-78.9 0-128 71.7-128 128 0 12.9 1.6 25.5 4.6 37.4-1.4-2.4-2.5-5-3.2-7.7-3.7-13.7-1.5-28 7.4-39.3 7.4-9.5 18-15.7 30-17.4 4-13.2 11.5-25.1 21.7-34.6 14.7-13.6 33.9-21.1 54-21.1 11.2 0 22.1 2.3 32 6.7-1.4-1-2.9-1.9-4.4-2.6-3.5-1.7-7.2-3-11-4.1-3-.9-6.1-1.6-9.3-2.2 3.5-.7 7-1.2 10.6-1.4 5.9-.3 11.8 0 17.7 1z"
-                      opacity="0.5"
-                    />
-                    <circle cx="150" cy="86" r="42" fill="#fff" opacity="0.6" />
-                    <path
-                      d="M150 56c-19.3 0-35 13.4-35 30 0 9.2 4.9 17.5 12.6 23l-2.5 11.5c-.3 1.3 1.1 2.3 2.3 1.6l13.4-7.2c2.9.8 6 1.2 9.2 1.2 19.3 0 35-13.4 35-30s-15.7-30-35-30z"
-                      fill="#00a884"
-                      opacity="0.85"
-                    />
-                  </svg>
-                </div>
-                <h2>AstroLamps WhatsApp</h2>
-                <p>
-                  Send and receive messages with your customers. Select a conversation from
-                  the sidebar to start chatting.
-                </p>
-                <div className="no-selection-footer">
-                  <span>🔒 End-to-end encrypted on WhatsApp</span>
-                </div>
-              </div>
-            )}
-          </main>
-        </div>
-      )}
+      <div className={isMobileView ? 'ws ws-mobile' : 'ws desktop-view'}>
+        {!isMobileView && (
+          <nav className="ws-rail" aria-label="Main">
+            {navItems.map((n) => (
+              <button key={n.id} type="button" className={`ws-nav ${view === n.id ? 'is-active' : ''}`} onClick={() => setView(n.id)} title={n.label}>
+                <Icon d={n.icon} />
+                <span>{n.label}</span>
+                {badges[n.id] > 0 && <span className="ws-badge">{badges[n.id]}</span>}
+              </button>
+            ))}
+            <span className="ws-rail-spacer" />
+            <div className="ws-user" title={`${staff.name} (${staff.role})`}>{(staff.name || '?')[0].toUpperCase()}</div>
+            <button type="button" className="ws-nav ws-signout" onClick={() => supabase.auth.signOut()} title="Sign out">
+              <Icon d="M10 17v-3H3v-4h7V7l5 5-5 5zm9-14H12v2h7v14h-7v2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" />
+              <span>Sign out</span>
+            </button>
+          </nav>
+        )}
+        <div className="ws-content">{content}</div>
+        {isMobileView && !hideTabs && (
+          <nav className="ws-tabs" aria-label="Main">
+            {navItems.map((n) => (
+              <button key={n.id} type="button" className={`ws-tab ${view === n.id ? 'is-active' : ''}`} onClick={() => setView(n.id)}>
+                <Icon d={n.icon} />
+                <span>{n.label}</span>
+                {badges[n.id] > 0 && <span className="ws-badge">{badges[n.id]}</span>}
+              </button>
+            ))}
+            <button type="button" className="ws-tab" onClick={() => supabase.auth.signOut()}>
+              <Icon d="M10 17v-3H3v-4h7V7l5 5-5 5zm9-14H12v2h7v14h-7v2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" />
+              <span>Sign out</span>
+            </button>
+          </nav>
+        )}
+      </div>
     </div>
   )
+}
+
+// Pops a browser notification (and updates the tab title) when a reminder
+// falls due while the inbox is open. Internal only — nothing is sent to
+// customers.
+function useReminderAlerts(followups, conversations, openChat) {
+  const notified = useRef(new Set())
+  useEffect(() => {
+    const check = () => {
+      const now = Date.now()
+      const due = followups.filter((f) => Date.parse(f.due_at) <= now)
+      document.title = due.length ? `(${due.length}) AstroLamps Inbox` : 'AstroLamps Inbox'
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+      for (const f of due) {
+        if (notified.current.has(f.id)) continue
+        notified.current.add(f.id)
+        if (now - Date.parse(f.due_at) > 10 * 60000) continue // don't spam old ones on page load
+        const c = conversations.find((x) => x.id === f.conversation_id)
+        const n = new Notification(`Reminder: ${c?.customer_name || 'customer'}`, {
+          body: f.note || (f.kind === 'call' ? 'Time to call this customer' : 'Follow up now'),
+          tag: f.id,
+        })
+        n.onclick = () => { window.focus(); openChat(f.conversation_id, f.order_id) }
+      }
+    }
+    check()
+    const t = setInterval(check, 30000)
+    return () => clearInterval(t)
+  }, [followups, conversations, openChat])
 }

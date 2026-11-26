@@ -5,6 +5,7 @@ import {
   deleteConversation,
   deleteConversationsBulk,
 } from '../utils/api'
+import { formatAge } from '../utils/workflow'
 import './ConversationList.css'
 
 const AVATAR_GRADIENTS = [
@@ -66,6 +67,7 @@ function formatPhone(phone) {
 
 const FILTERS = [
   { id: 'all', label: 'All' },
+  { id: 'waiting', label: 'Waiting' },
   { id: 'unread', label: 'Unread' },
   { id: 'confirmed', label: 'Confirmed' },
   { id: 'pending', label: 'Pending' },
@@ -113,12 +115,12 @@ const STATUS_OPTIONS = [
   { tag: 'cancelled',    label: 'Cancelled',    patch: { is_cancelled: true } },
 ]
 
-function buildTagMenu(currentTag) {
+function buildTagMenu(currentTag, isAdmin) {
   const statusItems = STATUS_OPTIONS
     .filter((opt) => opt.tag !== currentTag)
     .map((opt) => ({ kind: 'status', label: `Mark as ${opt.label}`, patch: opt.patch }))
-  // Destructive option always at the bottom, visually separated.
-  statusItems.push({ kind: 'delete', label: 'Delete conversation' })
+  // Destructive option (admins only) always at the bottom, visually separated.
+  if (isAdmin) statusItems.push({ kind: 'delete', label: 'Delete conversation' })
   return statusItems
 }
 
@@ -133,7 +135,9 @@ export default function ConversationList({
   filter,
   onFilterChange,
   counts,
+  staff,
 }) {
+  const isAdmin = staff?.role === 'admin'
   // Tag-action dropdown state. We track the open menu's screen coordinates
   // because we render via a portal — the conversation row is itself a
   // <button> with overflow:hidden ancestors, so an inline absolute-positioned
@@ -266,6 +270,7 @@ export default function ConversationList({
 
   const emptyMessage = (() => {
     if (searchTerm) return 'No matches found'
+    if (filter === 'waiting') return 'No customers waiting for a reply 🎉'
     if (filter === 'cancelled') return 'No cancelled conversations'
     if (filter === 'unread') return 'No unread conversations'
     if (filter === 'pending') return 'No conversations awaiting customer reply'
@@ -322,17 +327,19 @@ export default function ConversationList({
               </div>
               <h1>AstroLamps WA</h1>
             </div>
-            <button
-              type="button"
-              className="cl-topbar-action"
-              onClick={() => setSelectMode(true)}
-              title="Select chats"
-              aria-label="Select chats"
-            >
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
-                <path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-9 14l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
-              </svg>
-            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                className="cl-topbar-action"
+                onClick={() => setSelectMode(true)}
+                title="Select chats"
+                aria-label="Select chats"
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
+                  <path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-9 14l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+                </svg>
+              </button>
+            )}
           </>
         )}
       </header>
@@ -482,7 +489,7 @@ export default function ConversationList({
                       // In Select mode the row click toggles selection — we
                       // don't want a tag click to also fire and open a menu.
                       const hasActions = !selectMode
-                      const actions = hasActions ? buildTagMenu(tag.tag) : null
+                      const actions = hasActions ? buildTagMenu(tag.tag, isAdmin) : null
                       const onActivate = (e) => handleTagClick(e, conversation.id, actions)
                       return (
                         <span
@@ -517,6 +524,16 @@ export default function ConversationList({
                     <span className="cl-preview truncate">
                       {conversation.last_message || 'No messages yet'}
                     </span>
+                    {conversation.needs_reply && !conversation.is_cancelled && (
+                      <span
+                        className={`cl-wait ${
+                          Date.now() - Date.parse(conversation.waiting_since || 0) > 3600000 ? 'is-late' : ''
+                        }`}
+                        title="Waiting for a reply"
+                      >
+                        ⏱ {formatAge(conversation.waiting_since)}
+                      </span>
+                    )}
                     {hasUnread && (
                       <span className="cl-badge">{conversation.unread_count}</span>
                     )}

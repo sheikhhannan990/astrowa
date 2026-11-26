@@ -363,7 +363,7 @@
 /* ---------- Mobile ---------- */
 @media (max-width: 900px) {
   .chat-window {
-    height: 100dvh;
+    height: 100%;
   }
 
   .cw-header {
@@ -425,5 +425,82 @@
 
   .cw-messages {
     padding: 10px 3% 12px 3%;
+  }
+}
+
+/* Chat + order panel side by side (panel overlays on phones). */
+.cw-shell {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.cw-shell > .chat-window {
+  flex: 1;
+  min-width: 0;
+}
+
+.cw-order-btn {
+  position: relative;
+  background-color: #fff;
+  color: #3b4a54;
+  border: 1px solid var(--wa-panel-border);
+}
+
+.cw-order-btn.is-open {
+  background-color: #e7f6ef;
+  border-color: #bfe6d6;
+  color: #00664f;
+}
+
+.cw-stage {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--wa-panel-soft);
+}
+
+.cw-stage-pending { background: #fff3c4; color: #8a6100; }
+.cw-stage-confirmed { background: #e7f6ef; color: #00664f; }
+.cw-stage-cancelled { background: #fde7e7; color: #b71c1c; }
+.cw-stage-shipped { background: #e3f2fd; color: #0d47a1; }
+
+.cw-dot-alert {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ea4335;
+  border: 2px solid #fff;
+}
+
+/* Phones: keep the header readable — buttons become compact (icon or
+   status badge only) so the customer's name has room. */
+@media (max-width: 900px) {
+  .cw-header-actions {
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .cw-header-pill {
+    padding: 6px 8px;
+  }
+
+  .cw-address-btn > span,
+  .cw-address-btn .cw-pill-caret,
+  .cw-track-btn > span,
+  .cw-order-btn > span:first-child {
+    display: none;
+  }
+
+  .cw-address-btn {
+    background-color: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.35);
+    color: #fff;
   }
 }

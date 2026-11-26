@@ -264,3 +264,53 @@
     height: 44px;
   }
 }
+
+/* ---------- Suggested replies ---------- */
+.ri-suggest {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 0 4px 6px;
+  scrollbar-width: none;
+}
+
+.ri-suggest::-webkit-scrollbar {
+  display: none;
+}
+
+.ri-chip {
+  flex-shrink: 0;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #3b4a54;
+  background: var(--wa-panel-bg);
+  border: 1px solid var(--wa-panel-border);
+  white-space: nowrap;
+}
+
+.ri-chip:hover {
+  background: var(--wa-panel-hover);
+}
+
+.ri-chip.is-primary {
+  color: #00664f;
+  border-color: #bfe6d6;
+  background: #f1fbf7;
+  font-weight: 600;
+}
+
+.ri-chip-muted {
+  color: var(--wa-text-muted);
+  border-style: dashed;
+}
+
+.ri-window-closed {
+  margin: 0 4px 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  background: #fff3e0;
+  color: #a14f00;
+  font-size: 13px;
+}
