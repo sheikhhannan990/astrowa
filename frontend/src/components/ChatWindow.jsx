@@ -32,12 +32,13 @@ function formatAddress(addr) {
 
 export default function ChatWindow({
   conversation, orders = [], config, focusOrderId,
-  onOrderUpdated, onBack, onConversationUpdate, isMobile,
+  onOrderUpdated, onBack, onConversationUpdate, isMobile, defaultShowOrder,
 }) {
   const [messages, setMessages] = useState([])
   const [notes, setNotes] = useState([])
   // Order panel: open by default on wide screens, toggled on phones.
-  const [showOrder, setShowOrder] = useState(() => !isMobile && window.innerWidth >= 1200)
+  const [showOrder, setShowOrder] = useState(() =>
+    defaultShowOrder ?? (!isMobile && window.innerWidth >= 1200))
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showAddress, setShowAddress] = useState(false)
