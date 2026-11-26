@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { supabase } from './utils/supabaseClient'
 import { getCurrentStaffId, setCurrentStaffId } from './utils/currentStaff'
 import { addTeamMember, errorText } from './utils/api'
@@ -105,6 +105,7 @@ function Workspace({ staff, onSwitchUser }) {
   const [view, setView] = useState('today')
   const [selectedConversationId, setSelectedConversationId] = useState(null)
   const [focusOrderId, setFocusOrderId] = useState(null)
+  const [ordersChatOpen, setOrdersChatOpen] = useState(false)
   const [isMobileView, setIsMobileView] = useState(typeof window !== 'undefined' && window.innerWidth < 900)
 
   useEffect(() => {
@@ -113,18 +114,21 @@ function Workspace({ staff, onSwitchUser }) {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  const openChat = useCallback((conversationId, orderId = null) => {
-    if (!conversationId) return
-    setSelectedConversationId(conversationId)
-    setFocusOrderId(orderId)
-    setView('inbox')
-  }, [])
 
   const badges = { inbox: data.conversations.filter((c) => (c.unread_count || 0) > 0).length }
   const navItems = NAV
 
   let content
-  if (view === 'today') content = <Today data={data} onOpen={openChat} onOrderUpdated={data.upsertOrder} />
+  if (view === 'today') {
+    content = (
+      <Today
+        data={data}
+        onOrderUpdated={data.upsertOrder}
+        isMobileView={isMobileView}
+        onChatOpenChange={setOrdersChatOpen}
+      />
+    )
+  }
   else {
     content = (
       <Inbox
@@ -139,7 +143,7 @@ function Workspace({ staff, onSwitchUser }) {
   }
 
   // On phones the chat takes the full screen; hide the tab bar there.
-  const hideTabs = isMobileView && view === 'inbox' && selectedConversationId
+  const hideTabs = isMobileView && ((view === 'inbox' && selectedConversationId) || (view === 'today' && ordersChatOpen))
 
   return (
     <div className="app">

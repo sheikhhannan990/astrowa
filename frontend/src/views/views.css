@@ -879,3 +879,77 @@ button.td-kpi:not(:disabled):hover {
   padding: 6px 10px;
   font-size: 13px;
 }
+
+/* ---------- Orders page with the chat beside it ---------- */
+.orders-layout {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+
+.orders-layout > .today {
+  flex: 1;
+  min-width: 0;
+}
+
+.orders-layout.has-chat > .today {
+  flex: 0 0 42%;
+  max-width: 600px;
+  min-width: 380px;
+  padding: 16px 16px 32px;
+}
+
+.orders-chat {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  border-left: 1px solid var(--wa-panel-border);
+  background: var(--wa-chat-bg);
+}
+
+.orders-chat > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.orders-chat.is-mobile {
+  border-left: 0;
+  height: 100%;
+}
+
+.ol-row.is-open {
+  background: #e7f6ef;
+  box-shadow: inset 3px 0 0 var(--wa-accent);
+}
+
+/* Narrow list while a chat is open: stack each order's buttons below it. */
+.orders-layout.has-chat .td-kpis {
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+}
+
+.orders-layout.has-chat .td-kpi-value {
+  font-size: 22px;
+}
+
+.orders-layout.has-chat .ol-row {
+  flex-wrap: wrap;
+}
+
+.orders-layout.has-chat .ol-main {
+  flex-basis: calc(100% - 40px);
+}
+
+.orders-layout.has-chat .ol-actions {
+  width: 100%;
+  padding-left: 34px;
+}
+
+.orders-layout.has-chat .td-top {
+  flex-direction: column;
+}
+
+/* Address is already in the order panel here — give the name room. */
+.orders-chat .cw-address-btn {
+  display: none;
+}

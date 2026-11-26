@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase, fetchPaged } from '../utils/supabaseClient'
 import { orderAction, errorText } from '../utils/api'
+import ChatWindow from '../components/ChatWindow'
 import {
   FLAG_LABELS, STAGE_LABELS, formatPkt, rangeFor, pktDateInput, startOfTodayPKT,
   whatsappLink, phoneForDialing,
@@ -21,8 +22,12 @@ const WARNINGS = ['refused_before', 'not_on_whatsapp', 'village_address', 'addre
 
 // Orders page: every order in a date range, grouped by status, with the
 // notes written on each — so it's easy to see what was followed up.
-export default function Today({ data, onOpen, onOrderUpdated }) {
-  const { orders: liveOrders, conversations, loading, error } = data
+// Clicking an order opens its chat right here (beside the list on a
+// computer, full screen on a phone) instead of jumping to the Inbox.
+export default function Today({ data, onOrderUpdated, isMobileView, onChatOpenChange }) {
+  const { orders: liveOrders, conversations, config, loading, error, patchConversation } = data
+  const [selected, setSelected] = useState(null) // { conversationId, orderId }
+  const [fetchedConv, setFetchedConv] = useState(null)
   const [range, setRange] = useState('today')
   const [custom, setCustom] = useState(() => ({ from: pktDateInput(Date.now()), to: pktDateInput(Date.now()) }))
   const [filter, setFilter] = useState('all')
@@ -65,6 +70,41 @@ export default function Today({ data, onOpen, onOrderUpdated }) {
   }, [from])
 
   const convById = useMemo(() => new Map(conversations.map((c) => [c.id, c])), [conversations])
+
+  const onOpen = (conversationId, orderId) => setSelected({ conversationId, orderId })
+  const closeChat = () => setSelected(null)
+
+  useEffect(() => {
+    onChatOpenChange?.(!!selected)
+  }, [selected, onChatOpenChange])
+  useEffect(() => () => onChatOpenChange?.(false), [onChatOpenChange])
+
+  // The inbox list holds the most recent chats; older ones are fetched.
+  const liveConv = selected ? convById.get(selected.conversationId) : null
+  useEffect(() => {
+    if (!selected || liveConv) { setFetchedConv(null); return }
+    let cancelled = false
+    supabase.from('conversations').select('*').eq('id', selected.conversationId).maybeSingle()
+      .then(({ data: row }) => { if (!cancelled) setFetchedConv(row || null) })
+    return () => { cancelled = true }
+  }, [selected, liveConv])
+  const selectedConv = liveConv || (fetchedConv?.id === selected?.conversationId ? fetchedConv : null)
+
+  const chatOrders = useMemo(() => {
+    if (!selectedConv) return []
+    const all = [...liveOrders, ...(olderOrders || [])]
+    const seen = new Set()
+    return all
+      .filter((o) => (o.conversation_id === selectedConv.id || o.phone === selectedConv.phone) && !seen.has(o.id) && seen.add(o.id))
+      .sort((a, b) => Date.parse(b.order_created_at) - Date.parse(a.order_created_at))
+  }, [liveOrders, olderOrders, selectedConv])
+
+  useEffect(() => {
+    if (!selected) return
+    const onKey = (e) => { if (e.key === 'Escape') closeChat() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selected])
 
   const inRange = useMemo(() => {
     const source = needsFetch ? (olderOrders || []) : liveOrders
@@ -144,7 +184,32 @@ export default function Today({ data, onOpen, onOrderUpdated }) {
   ]
   if (counts.returned) tiles.splice(6, 0, { id: 'returned', label: 'Returned', tone: 'bad' })
 
+  const chat = selected && (
+    <div className={`orders-chat ${isMobileView ? 'is-mobile' : ''}`}>
+      {selectedConv ? (
+        <ChatWindow
+          key={selectedConv.id}
+          conversation={selectedConv}
+          orders={chatOrders}
+          config={config}
+          focusOrderId={selected.orderId}
+          defaultShowOrder={isMobileView ? false : window.innerWidth >= 1500}
+          onOrderUpdated={onOrderUpdated}
+          onConversationUpdate={(id) => patchConversation(id, { unread_count: 0 })}
+          onBack={closeChat}
+          isMobile={isMobileView}
+        />
+      ) : (
+        <div className="td-empty">Loading chat…</div>
+      )}
+    </div>
+  )
+
+  // Phone: the chat takes the whole screen; back returns to the list.
+  if (isMobileView && chat) return chat
+
   return (
+    <div className={`orders-layout ${chat ? 'has-chat' : ''}`}>
     <div className="today orders-page">
       <div className="td-top">
         <div>
@@ -197,24 +262,26 @@ export default function Today({ data, onOpen, onOrderUpdated }) {
             <div className="ol-rows">
               {g.orders.map((o) => (
                 <OrderRow key={o.id} order={o} conv={convById.get(o.conversation_id)} notes={notesByOrder(o)}
-                  onOpen={onOpen} onStar={toggleImportant} />
+                  onOpen={onOpen} onStar={toggleImportant} isOpen={selected?.orderId === o.id} />
               ))}
             </div>
           </section>
         ))
       )}
     </div>
+    {chat}
+    </div>
   )
 }
 
-function OrderRow({ order, conv, notes, onOpen, onStar }) {
+function OrderRow({ order, conv, notes, onOpen, onStar, isOpen }) {
   const flags = order.flags || []
   const important = flags.includes('important')
   const warnings = flags.filter((f) => WARNINGS.includes(f))
   const name = order.customer_name || conv?.customer_name || 'Customer'
   const open = () => order.conversation_id && onOpen(order.conversation_id, order.id)
   return (
-    <div className={`ol-row ${important ? 'is-important' : ''}`}>
+    <div className={`ol-row ${important ? 'is-important' : ''} ${isOpen ? 'is-open' : ''}`}>
       <button type="button" className={`ol-star ${important ? 'is-on' : ''}`} onClick={() => onStar(order)}
         title={important ? 'Remove from important' : 'Mark as important — revisit this order'} aria-pressed={important}>
         {important ? '★' : '☆'}
