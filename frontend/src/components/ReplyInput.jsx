@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect } from 'react'
-import { sendMessage, sendMedia, markNoReplyNeeded, errorText } from '../utils/api'
+import { sendMessage, sendMedia } from '../utils/api'
 import QuickReplies, { loadQuickReplies } from './QuickReplies'
 import { fillVariables, suggestReplies, windowHoursLeft } from '../utils/workflow'
 import './ReplyInput.css'
@@ -58,7 +58,7 @@ export default function ReplyInput({ conversation, order, config, lastIncoming, 
   const [recording, setRecording] = useState(false)
   const [recordSeconds, setRecordSeconds] = useState(0)
 
-  const [frequent, setFrequent] = useState([])
+  const [quickReplies, setQuickReplies] = useState([])
   // Quick reply the current text came from, so its usage is counted.
   const quickReplyIdRef = useRef(null)
   const wrapRef = useRef(null)
@@ -76,7 +76,7 @@ export default function ReplyInput({ conversation, order, config, lastIncoming, 
 
   useEffect(() => {
     loadQuickReplies()
-      .then((items) => setFrequent(items.filter((q) => q.use_count > 0).slice(0, 3)))
+      .then(setQuickReplies)
       .catch(() => {})
   }, [])
 
@@ -322,16 +322,14 @@ export default function ReplyInput({ conversation, order, config, lastIncoming, 
       {windowClosed && !attachment && !recording && (
         <div className="ri-window-closed" role="note">
           {conversation.is_not_on_whatsapp
-            ? 'This customer is not on WhatsApp — call them instead.'
-            : "WhatsApp's 24-hour reply window is closed (the customer hasn't messaged in a day). Messages will fail — call instead."}
+            ? 'Not on WhatsApp — call this customer.'
+            : "Customer hasn't messaged in 24 hours, so WhatsApp won't deliver a reply — call instead."}
         </div>
       )}
 
       {!windowClosed && !message && !attachment && !recording && !quickRepliesOpen && (
         <SuggestionRow
-          suggestions={suggestReplies({ lastIncoming, order, conversation, config })}
-          frequent={frequent}
-          needsReply={conversation.needs_reply}
+          suggestions={suggestReplies({ lastIncoming, order, conversation, quickReplies })}
           onText={(text) => {
             quickReplyIdRef.current = null
             setMessage(text)
@@ -339,7 +337,6 @@ export default function ReplyInput({ conversation, order, config, lastIncoming, 
           }}
           onQuickReply={handlePickQuickReply}
           onAction={(action) => onOrderAction?.(action)}
-          onNoReply={() => markNoReplyNeeded(conversation.id).catch((err) => setError(errorText(err)))}
         />
       )}
 
@@ -503,29 +500,23 @@ export default function ReplyInput({ conversation, order, config, lastIncoming, 
   )
 }
 
-// Suggested replies for the latest customer message, plus the team's most
-// used quick replies. Tapping one fills the box (it's never sent
-// automatically) so it can be edited first.
-function SuggestionRow({ suggestions, frequent, needsReply, onText, onQuickReply, onAction, onNoReply }) {
-  const chips = [
-    ...suggestions.map((s) => ({ key: s.id, label: s.label, primary: true, onClick: () => (s.action ? onAction(s.action) : onText(s.text)) })),
-    ...frequent
-      .filter((q) => !suggestions.some((s) => s.label === q.title))
-      .map((q) => ({ key: q.id, label: q.title, onClick: () => onQuickReply(q) })),
-  ].slice(0, 5)
-  if (!chips.length && !needsReply) return null
+// Suggested replies (like Instagram's): the quick reply that fits this
+// order and the customer's last message. Tapping fills the box so it can
+// be checked first — nothing is sent automatically.
+function SuggestionRow({ suggestions, onText, onQuickReply, onAction }) {
+  if (!suggestions.length) return null
   return (
     <div className="ri-suggest" role="toolbar" aria-label="Suggested replies">
-      {chips.map((c) => (
-        <button key={c.key} type="button" className={`ri-chip ${c.primary ? 'is-primary' : ''}`} onClick={c.onClick}>
-          {c.primary ? '✨ ' : ''}{c.label}
+      {suggestions.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          className="ri-chip is-primary"
+          onClick={() => (s.action ? onAction(s.action) : s.reply ? onQuickReply(s.reply) : onText(s.text))}
+        >
+          ✨ {s.label}
         </button>
       ))}
-      {needsReply && (
-        <button type="button" className="ri-chip ri-chip-muted" onClick={onNoReply} title="Remove from the waiting list without replying">
-          No reply needed
-        </button>
-      )}
     </div>
   )
 }

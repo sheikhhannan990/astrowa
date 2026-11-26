@@ -1,18 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { supabase } from './utils/supabaseClient'
 import { getCurrentStaffId, setCurrentStaffId } from './utils/currentStaff'
+import { addTeamMember, errorText } from './utils/api'
 import useWorkspaceData from './utils/useWorkspaceData'
 import Inbox from './views/Inbox'
 import Today from './views/Today'
-import Activity from './views/Activity'
-import Team from './views/Team'
 import './App.css'
 
 const NAV = [
   { id: 'today', label: 'Today', icon: 'M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 16H5V9h14v11zM7 11h5v5H7z' },
   { id: 'inbox', label: 'Inbox', icon: 'M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z' },
-  { id: 'activity', label: 'Activity', admin: true, icon: 'M3 13h2v8H3zm4-6h2v14H7zm4 3h2v11h-2zm4-7h2v18h-2zm4 9h2v9h-2z' },
-  { id: 'team', label: 'Team', admin: true, icon: 'M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm-8 0a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 2 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5z' },
 ]
 
 function Icon({ d }) {
@@ -54,6 +51,21 @@ export default function App() {
 // never asked again. Not a password, just so actions are recorded under
 // the right name.
 function WhoAreYou({ team, onChoose, error }) {
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [addError, setAddError] = useState(null)
+  async function addMe(e) {
+    e.preventDefault()
+    if (!name.trim() || busy) return
+    setBusy(true)
+    try {
+      const res = await addTeamMember({ name: name.trim(), role: 'agent' })
+      onChoose(res.member.user_id)
+    } catch (err) {
+      setAddError(errorText(err))
+      setBusy(false)
+    }
+  }
   return (
     <div className="login">
       <div className="login-card">
@@ -78,8 +90,11 @@ function WhoAreYou({ team, onChoose, error }) {
             </button>
           ))}
         </div>
-        {!error && team.length === 0 && <p className="login-help">No team members yet — run the phase 1 SQL in Supabase.</p>}
-        <p className="login-help">New team member? Ask the admin to add your name on the Team page.</p>
+        <form className="who-add" onSubmit={addMe}>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Not listed? Type your name" />
+          <button type="submit" className="td-btn td-btn-primary" disabled={busy || !name.trim()}>Add</button>
+        </form>
+        {addError && <div className="login-error">{addError}</div>}
       </div>
     </div>
   )
@@ -91,7 +106,6 @@ function Workspace({ staff, onSwitchUser }) {
   const [selectedConversationId, setSelectedConversationId] = useState(null)
   const [focusOrderId, setFocusOrderId] = useState(null)
   const [isMobileView, setIsMobileView] = useState(typeof window !== 'undefined' && window.innerWidth < 900)
-  const isAdmin = staff.role === 'admin'
 
   useEffect(() => {
     const onResize = () => setIsMobileView(window.innerWidth < 900)
@@ -106,17 +120,11 @@ function Workspace({ staff, onSwitchUser }) {
     setView('inbox')
   }, [])
 
-  useReminderAlerts(data.followups, data.conversations, openChat)
-
-  const overdue = data.followups.filter((f) => Date.parse(f.due_at) < Date.now()).length
-  const waiting = data.conversations.filter((c) => c.needs_reply && !c.is_cancelled).length
-  const badges = { today: overdue + waiting, inbox: data.conversations.filter((c) => (c.unread_count || 0) > 0).length }
-  const navItems = NAV.filter((n) => !n.admin || isAdmin)
+  const badges = { inbox: data.conversations.filter((c) => (c.unread_count || 0) > 0).length }
+  const navItems = NAV
 
   let content
-  if (view === 'today') content = <Today data={data} staff={staff} onOpen={openChat} />
-  else if (view === 'activity' && isAdmin) content = <Activity data={data} onOpen={openChat} />
-  else if (view === 'team' && isAdmin) content = <Team staff={staff} />
+  if (view === 'today') content = <Today data={data} onOpen={openChat} />
   else {
     content = (
       <Inbox
@@ -172,33 +180,4 @@ function Workspace({ staff, onSwitchUser }) {
       </div>
     </div>
   )
-}
-
-// Pops a browser notification (and updates the tab title) when a reminder
-// falls due while the inbox is open. Internal only — nothing is sent to
-// customers.
-function useReminderAlerts(followups, conversations, openChat) {
-  const notified = useRef(new Set())
-  useEffect(() => {
-    const check = () => {
-      const now = Date.now()
-      const due = followups.filter((f) => Date.parse(f.due_at) <= now)
-      document.title = due.length ? `(${due.length}) AstroLamps Inbox` : 'AstroLamps Inbox'
-      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
-      for (const f of due) {
-        if (notified.current.has(f.id)) continue
-        notified.current.add(f.id)
-        if (now - Date.parse(f.due_at) > 10 * 60000) continue // don't spam old ones on page load
-        const c = conversations.find((x) => x.id === f.conversation_id)
-        const n = new Notification(`Reminder: ${c?.customer_name || 'customer'}`, {
-          body: f.note || (f.kind === 'call' ? 'Time to call this customer' : 'Follow up now'),
-          tag: f.id,
-        })
-        n.onclick = () => { window.focus(); openChat(f.conversation_id, f.order_id) }
-      }
-    }
-    check()
-    const t = setInterval(check, 30000)
-    return () => clearInterval(t)
-  }, [followups, conversations, openChat])
 }

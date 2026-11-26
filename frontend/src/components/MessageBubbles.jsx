@@ -192,42 +192,13 @@ function renderMessageBody(message) {
   return <div className="mb-text">{renderMessageText(message.body)}</div>
 }
 
-export default function MessageBubbles({ messages, notes = [] }) {
+export default function MessageBubbles({ messages }) {
   let lastDateKey = null
   let lastDirection = null
 
-  // Internal notes sit in the timeline between messages, by time.
-  const items = notes.length
-    ? [...messages, ...notes.map((n) => ({ ...n, _note: true }))].sort(
-        (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at),
-      )
-    : messages
-
   return (
     <div className="mb-list">
-      {items.map((message) => {
-        if (message._note) {
-          const currentKey = dateKey(message.created_at)
-          const showDate = currentKey !== lastDateKey
-          lastDateKey = currentKey
-          lastDirection = null
-          return (
-            <Fragment key={`note-${message.id}`}>
-              {showDate && (
-                <div className="mb-date-divider">
-                  <span>{dateLabel(message.created_at)}</span>
-                </div>
-              )}
-              <div className="mb-note" role="note">
-                <div className="mb-note-head">
-                  📝 Internal note{message.phone ? ' · customer' : ''} — {message.author_name}
-                  <span className="mb-note-time">{formatTime(message.created_at)}</span>
-                </div>
-                <div className="mb-note-body">{renderMessageText(message.body)}</div>
-              </div>
-            </Fragment>
-          )
-        }
+      {messages.map((message) => {
         const isOutgoing = message.direction === 'outgoing'
         const currentKey = dateKey(message.created_at)
         const showDate = currentKey !== lastDateKey

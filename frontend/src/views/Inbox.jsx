@@ -6,9 +6,9 @@ import ChatWindow from '../components/ChatWindow'
 export default function Inbox({
   data, staff, selectedConversationId, onSelectConversation, focusOrderId, isMobileView,
 }) {
-  const { conversations, orders, followups, config, loading, error, patchConversation, upsertOrder } = data
+  const { conversations, orders, config, loading, error, patchConversation, upsertOrder } = data
   const [searchTerm, setSearchTerm] = useState('')
-  // Filter pills: 'all' | 'waiting' | 'unread' | 'pending' | ... | 'cancelled'.
+  // Filter pills: 'all' | 'unread' | 'pending' | ... | 'cancelled'.
   // 'all' shows every chat including cancelled ones; 'cancelled' shows only them.
   const [filter, setFilter] = useState('all')
 
@@ -26,10 +26,6 @@ export default function Inbox({
       .filter((o) => o.conversation_id === selectedConversation.id || o.phone === selectedConversation.phone)
       .sort((a, b) => Date.parse(b.order_created_at) - Date.parse(a.order_created_at))
   }, [orders, selectedConversation])
-  const chatFollowups = useMemo(
-    () => (selectedConversation ? followups.filter((f) => f.conversation_id === selectedConversation.id) : []),
-    [followups, selectedConversation],
-  )
 
   // 'pending'   = awaiting customer action (COD confirmation OR bank deposit screenshot)
   // 'confirmed' = customer has acted (tapped Confirm) or merchant has marked
@@ -50,7 +46,6 @@ export default function Inbox({
   const counts = conversations.reduce(
     (acc, c) => {
       acc.all += 1
-      if (c.needs_reply && !c.is_cancelled) acc.waiting += 1
       if (c.is_cancelled) {
         acc.cancelled += 1
         return acc
@@ -66,7 +61,7 @@ export default function Inbox({
       if (isBankDeposit(c)) acc.bankdeposit += 1
       return acc
     },
-    { all: 0, waiting: 0, unread: 0, pending: 0, confirmed: 0, fulfilled: 0, cancelled: 0, notwa: 0, bankdeposit: 0 }
+    { all: 0, unread: 0, pending: 0, confirmed: 0, fulfilled: 0, cancelled: 0, notwa: 0, bankdeposit: 0 }
   )
 
   const filteredConversations = conversations.filter((conv) => {
@@ -74,8 +69,6 @@ export default function Inbox({
       // All really means all — cancelled chats stay visible here (tagged
       // "Cancelled") so a customer who cancels doesn't vanish from the main
       // list. The Cancelled tab still exists to see only those.
-    } else if (filter === 'waiting') {
-      if (!conv.needs_reply || conv.is_cancelled) return false
     } else if (filter === 'cancelled') {
       if (!conv.is_cancelled) return false
     } else if (filter === 'notwa') {
@@ -131,9 +124,7 @@ export default function Inbox({
     <ChatWindow
       conversation={selectedConversation}
       orders={chatOrders}
-      followups={chatFollowups}
       config={config}
-      staff={staff}
       focusOrderId={focusOrderId}
       onOrderUpdated={upsertOrder}
       onConversationPatch={patchConversation}

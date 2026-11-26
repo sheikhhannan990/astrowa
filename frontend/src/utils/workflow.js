@@ -74,6 +74,7 @@ export const FLAG_LABELS = {
   unreachable: 'Unreachable',
   wrong_number: 'Wrong number',
   whatsapp_failed: 'WhatsApp send failed',
+  refused_before: 'Refused before',
 }
 
 export const CALL_OUTCOMES = [
@@ -132,17 +133,31 @@ export function fillVariables(text, { conversation, order, config }) {
     .replace(/^(Hi|Hello|Dear)\s+,/m, '$1,')
 }
 
-// ---------- Suggested replies (rules learned from past chats) ----------
+// ---------- Notes ----------
+
+// One-tap notes for the most common outcomes; anything else can be typed.
+export const NOTE_PRESETS = [
+  "Didn't pick call",
+  "Didn't respond",
+  'Call back later',
+  'Confirmed on call',
+  'Address confirmed',
+  'Will pay advance',
+  'Wrong number',
+  'Wants to cancel',
+]
+
+// ---------- Suggested replies ----------
+// Like Instagram's suggested replies: based on the order and what the
+// customer just said, suggest the quick reply you'd normally send.
+// Patterns come from your past chats.
 
 const TOPICS = [
   ['ack', /^(ok+|okay|okk+|oky|okok|ok sir|sure|alright|perfect|done|thanks?|thank ?you|thankyou|ty|jazak\S*|👍\S*|great|nice|good|fine|theek|thik|acha|jee|ji)\W{0,3}( ?(thanks?|thank ?you|thankyou|sir|bhai|g|ji|jee))?\W{0,3}$/],
   ['cancel', /cancel|nahi chahiye|nhi chahiye|don'?t want|not want|wapis/],
   ['payment', /payment|paid|\bpay\b|bank|transfer|easypaisa|jazzcash|iban|screenshot|advance|account/],
   ['damage', /broken|damage|crack|not working|kharab|toot|tut gay|defect|replace|refund|warranty/],
-  ['address', /address|location|house|street|block|mohalla|village|gali|sector|phase/],
   ['delivery', /when|kab|kb\b|tak\b|tk\b|deliver|parcel|receive|rider|dispatch|track|courier|reach|poncha|puhanch|pohanch|mil ja|kitne din|days|today|tomorrow|\bkal\b|abhi tak|still|yet|where|update/],
-  ['product', /remote|light|lamp|colou?r|price|size|battery|charging|bulb|how to|kaise/],
-  ['nudge', /^[?.!]+$|^(hello|hi|hey|aoa|salam)\W*$/],
 ]
 
 export function topicOf(text) {
@@ -152,47 +167,34 @@ export function topicOf(text) {
   return null
 }
 
-// Returns [{ id, label, text?, action? }] for the composer's suggestion row.
-export function suggestReplies({ lastIncoming, order, conversation, config }) {
+const findReply = (replies, rx) => replies.find((q) => rx.test(q.title || ''))
+
+// Returns [{ id, label, reply? (quick reply), text?, action? }].
+export function suggestReplies({ lastIncoming, order, conversation, quickReplies = [] }) {
   const out = []
+  const add = (reply, label) => {
+    if (reply && !out.some((s) => s.reply?.id === reply.id)) out.push({ id: reply.id, label: label || reply.title, reply })
+  }
   const stage = order?.stage
-  const days = deliveryDays(order?.city || conversation?.shipping_address?.city, config)
-  const tracking = order?.tracking_number || conversation?.tracking_number
+  const flags = order?.flags || []
+  const open = !order || stage === 'pending'
   const isBank = order?.payment_method === 'bank' || conversation?.last_template === 'bank_pending'
   const topic = lastIncoming?.type === 'text' ? topicOf(lastIncoming.body) : null
-  const sentImage = lastIncoming && ['image', 'document'].includes(lastIncoming.type)
+  const sentPicture = lastIncoming && ['image', 'document'].includes(lastIncoming.type)
 
-  if (sentImage && isBank && stage === 'pending') {
-    out.push({ id: 'paid', label: 'Mark paid & notify', action: 'mark_paid' })
-  }
-  if (topic === 'delivery' || topic === 'nudge') {
-    if (stage === 'shipped' && tracking) {
-      out.push({ id: 'track', label: 'Tracking update', text:
-        `Your order has been dispatched. You can track it here: https://postex.pk/tracking?cn=${tracking}\n\nExpected delivery: ${days} working days, InshaAllah.` })
-    } else if (stage === 'confirmed') {
-      out.push({ id: 'soon', label: 'Dispatching soon', text:
-        `Your order is confirmed and will be dispatched shortly. Expected delivery: ${days} working days, InshaAllah.` })
-    } else if (stage === 'pending' && !isBank) {
-      out.push({ id: 'confirm', label: 'Ask to confirm', text:
-        "Please confirm your order by tapping 'Confirm Order' on the message above so we can dispatch it." })
-    } else if (stage === 'pending' && isBank) {
-      out.push({ id: 'paynote', label: 'Payment pending', text:
-        'Payment is pending at your end. Please make payment to the account mentioned above and share a screenshot with us.' })
-    }
-  }
-  if (topic === 'cancel') out.push({ id: 'reason', label: 'Ask reason', text: CANCEL_REASON_QUESTION })
-  if (topic === 'damage') {
-    out.push({ id: 'video', label: 'Ask for video', text: 'Can you please share a video of the issue with us?' })
-  }
-  if (topic === 'address' && order?.flags?.includes('address_issue')) {
-    out.push({ id: 'addr_ok', label: 'Address noted', text: "Thank you! We've updated your address." })
-  }
-  if (sentImage && !isBank && stage !== 'shipped') {
-    out.push({ id: 'video_ok', label: 'Thanks, checking', text: "Thank you for sharing. We're checking this and will get back to you shortly." })
-  }
-  return out
-}
+  // Order still open: the checks you'd do before dispatching.
+  if (open && flags.includes('refused_before')) add(findReply(quickReplies, /advance|refus/i), 'Refused before → ask PKR 200')
+  if (open && flags.includes('village_address')) add(findReply(quickReplies, /village/i))
+  if (open && flags.includes('address_incomplete')) add(findReply(quickReplies, /incomplete/i))
+  if (open && isBank && sentPicture) out.unshift({ id: 'paid', label: 'Mark paid & notify', action: 'mark_paid' })
+  if (open && isBank && topic === 'payment' && !sentPicture) add(findReply(quickReplies, /bank details/i))
 
-export function isAck(text) {
-  return topicOf(text) === 'ack'
+  // Whatever the stage, answer what the customer asked.
+  if (topic === 'cancel' && stage !== 'cancelled') add(findReply(quickReplies, /reason/i))
+  if (topic === 'damage') out.push({ id: 'video', label: 'Ask for video', text: 'Can you please share a video of the issue with us?' })
+  if (topic === 'delivery' && stage === 'shipped' && order?.tracking_number) {
+    out.push({ id: 'track', label: 'Send tracking', text:
+      `Your order has been dispatched. You can track it here: https://postex.pk/tracking?cn=${order.tracking_number}` })
+  }
+  return out.slice(0, 4)
 }

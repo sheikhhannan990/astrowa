@@ -504,3 +504,34 @@
     color: #fff;
   }
 }
+
+/* Latest note, one line under the header — tap to open all notes. */
+.cw-note-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 16px;
+  background: #fff8d6;
+  border-bottom: 1px solid #f2e1a6;
+  text-align: left;
+  position: relative;
+  z-index: 2;
+}
+
+.cw-note-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #5c4300;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cw-note-meta {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: #8a6100;
+}

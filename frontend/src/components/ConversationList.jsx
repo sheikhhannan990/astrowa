@@ -5,7 +5,6 @@ import {
   deleteConversation,
   deleteConversationsBulk,
 } from '../utils/api'
-import { formatAge } from '../utils/workflow'
 import './ConversationList.css'
 
 const AVATAR_GRADIENTS = [
@@ -67,7 +66,6 @@ function formatPhone(phone) {
 
 const FILTERS = [
   { id: 'all', label: 'All' },
-  { id: 'waiting', label: 'Waiting' },
   { id: 'unread', label: 'Unread' },
   { id: 'confirmed', label: 'Confirmed' },
   { id: 'pending', label: 'Pending' },
@@ -270,7 +268,6 @@ export default function ConversationList({
 
   const emptyMessage = (() => {
     if (searchTerm) return 'No matches found'
-    if (filter === 'waiting') return 'No customers waiting for a reply 🎉'
     if (filter === 'cancelled') return 'No cancelled conversations'
     if (filter === 'unread') return 'No unread conversations'
     if (filter === 'pending') return 'No conversations awaiting customer reply'
@@ -520,20 +517,16 @@ export default function ConversationList({
                     })()}
                   </div>
 
+                  {conversation.last_note && (
+                    <div className="cl-note truncate" title={`${conversation.last_note_by || ''}: ${conversation.last_note}`}>
+                      📝 {conversation.last_note}
+                    </div>
+                  )}
+
                   <div className="cl-row-bottom">
                     <span className="cl-preview truncate">
                       {conversation.last_message || 'No messages yet'}
                     </span>
-                    {conversation.needs_reply && !conversation.is_cancelled && (
-                      <span
-                        className={`cl-wait ${
-                          Date.now() - Date.parse(conversation.waiting_since || 0) > 3600000 ? 'is-late' : ''
-                        }`}
-                        title="Waiting for a reply"
-                      >
-                        ⏱ {formatAge(conversation.waiting_since)}
-                      </span>
-                    )}
                     {hasUnread && (
                       <span className="cl-badge">{conversation.unread_count}</span>
                     )}

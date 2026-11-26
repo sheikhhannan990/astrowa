@@ -4,7 +4,7 @@ import MessageBubbles from './MessageBubbles'
 import ReplyInput from './ReplyInput'
 import OrderPanel from './OrderPanel'
 import { orderAction, errorText } from '../utils/api'
-import { STAGE_LABELS } from '../utils/workflow'
+import { STAGE_LABELS, formatPkt } from '../utils/workflow'
 import './ChatWindow.css'
 
 function formatPhone(phone) {
@@ -31,7 +31,7 @@ function formatAddress(addr) {
 }
 
 export default function ChatWindow({
-  conversation, orders = [], followups = [], config, staff, focusOrderId,
+  conversation, orders = [], config, focusOrderId,
   onOrderUpdated, onBack, onConversationUpdate, isMobile,
 }) {
   const [messages, setMessages] = useState([])
@@ -257,7 +257,6 @@ export default function ChatWindow({
             {currentOrder && (
               <span className={`cw-stage cw-stage-${currentOrder.stage}`}>{STAGE_LABELS[currentOrder.stage]}</span>
             )}
-            {followups.some((f) => Date.parse(f.due_at) < Date.now()) && <span className="cw-dot-alert" aria-label="Overdue reminder" />}
           </button>
           {hasAddress && (
             <div className="cw-action-wrap">
@@ -372,6 +371,13 @@ export default function ChatWindow({
         </div>
       </header>
 
+      {conversation.last_note && (
+        <button type="button" className="cw-note-bar" onClick={() => setShowOrder(true)} title="Open notes">
+          <span className="cw-note-text">📝 {conversation.last_note}</span>
+          <span className="cw-note-meta">{conversation.last_note_by} · {formatPkt(conversation.last_note_at)}</span>
+        </button>
+      )}
+
       <div className="cw-messages" ref={scrollRef}>
         {loading ? (
           <div className="cw-status">Loading messages...</div>
@@ -383,7 +389,7 @@ export default function ChatWindow({
           </div>
         ) : (
           <>
-            <MessageBubbles messages={messages} notes={notes} />
+            <MessageBubbles messages={messages} />
             <div ref={messagesEndRef} />
           </>
         )}
@@ -403,10 +409,8 @@ export default function ChatWindow({
     <OrderPanel
       conversation={conversation}
       orders={orders}
-      followups={followups}
       notes={notes}
       config={config}
-      staff={staff}
       focusOrderId={focusOrderId}
       onOrderUpdated={onOrderUpdated}
       onClose={() => setShowOrder(false)}

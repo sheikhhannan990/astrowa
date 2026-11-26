@@ -23,12 +23,11 @@ function applyChange(list, payload, sort) {
   return sort ? next.sort(sort) : next
 }
 
-// Chats, recent orders and open reminders, kept live with Supabase
+// Chats and recent orders, kept live with Supabase
 // realtime. Shared by the Today queue and the Inbox.
 export default function useWorkspaceData() {
   const [conversations, setConversations] = useState([])
   const [orders, setOrders] = useState([])
-  const [followups, setFollowups] = useState([])
   const [config, setConfig] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -55,20 +54,10 @@ export default function useWorkspaceData() {
     setOrders(rows)
   }, [])
 
-  const fetchFollowups = useCallback(async () => {
-    const { data, error: err } = await supabase
-      .from('followups')
-      .select('*')
-      .is('done_at', null)
-      .order('due_at', { ascending: true })
-    if (err) throw err
-    setFollowups(data || [])
-  }, [])
-
   const refreshAll = useCallback(async ({ silent = false } = {}) => {
     try {
       if (!silent) setLoading(true)
-      await Promise.all([fetchConversations(), fetchOrders(), fetchFollowups()])
+      await Promise.all([fetchConversations(), fetchOrders()])
       setError(null)
     } catch (err) {
       console.error('Failed to load workspace data:', err)
@@ -76,7 +65,7 @@ export default function useWorkspaceData() {
     } finally {
       setLoading(false)
     }
-  }, [fetchConversations, fetchOrders, fetchFollowups])
+  }, [fetchConversations, fetchOrders])
 
   useEffect(() => {
     refreshAll()
@@ -90,9 +79,6 @@ export default function useWorkspaceData() {
         (p) => setConversations((prev) => applyChange(prev, p, byLastMessageDesc)))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' },
         (p) => setOrders((prev) => applyChange(prev, p)))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'followups' },
-        (p) => setFollowups((prev) =>
-          applyChange(prev, p).filter((f) => !f.done_at).sort((a, b) => Date.parse(a.due_at) - Date.parse(b.due_at))))
       .subscribe((status) => {
         // Full refresh on every (re)connect so nothing is missed.
         if (status === 'SUBSCRIBED') refreshAll({ silent: true })
@@ -113,7 +99,7 @@ export default function useWorkspaceData() {
   }, [])
 
   return {
-    conversations, orders, followups, config, loading, error,
+    conversations, orders, config, loading, error,
     refreshAll, patchConversation, upsertOrder,
   }
 }
