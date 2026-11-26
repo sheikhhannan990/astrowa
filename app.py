@@ -2164,6 +2164,7 @@ FLAG_LABELS = {
     "wrong_number": "Wrong number",
     "whatsapp_failed": "WhatsApp send failed",
     "refused_before": "Refused before",
+    "important": "Important",
 }
 _ADDRESS_FLAGS = {"address_incomplete", "village_address", "no_city", "address_issue"}
 
@@ -2753,6 +2754,12 @@ def order_action(order_id, staff):
     elif action == "edit_address":
         order = _apply_address_edit(order, data, who)
         log_activity(staff, "address", f"Updated address for {num}", conversation_id=conv_id, order_id=order_id)
+
+    elif action == "important":
+        on = bool(data.get("value", True))
+        order = change_flags(order, add=["important"] if on else [], remove=[] if on else ["important"])
+        log_activity(staff, "flag", f"{'Starred' if on else 'Unstarred'} {num} as important",
+                     conversation_id=conv_id, order_id=order_id)
 
     elif action == "clear_flag":
         flag = data.get("flag")

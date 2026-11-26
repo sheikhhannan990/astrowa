@@ -75,6 +75,7 @@ export const FLAG_LABELS = {
   wrong_number: 'Wrong number',
   whatsapp_failed: 'WhatsApp send failed',
   refused_before: 'Refused before',
+  important: 'Important',
 }
 
 export const CALL_OUTCOMES = [
@@ -110,6 +111,32 @@ export function deliveryDays(city, config) {
 
 export function phoneForDialing(phone) {
   return phone ? `+${phone}` : ''
+}
+
+// Opens the customer in whichever WhatsApp is on this phone/computer (e.g.
+// the team's other account) — free follow-ups outside this inbox.
+export function whatsappLink(phone, text) {
+  if (!phone) return ''
+  return `https://wa.me/${phone}${text ? `?text=${encodeURIComponent(text)}` : ''}`
+}
+
+// Date ranges for the orders page, as [startMs, endMs) in Pakistan time.
+export function rangeFor(id, custom = {}) {
+  const today = startOfTodayPKT().getTime()
+  const day = 86400000
+  if (id === 'yesterday') return [today - day, today]
+  if (id === 'week') return [today - 6 * day, today + day]
+  if (id === 'month') return [today - 29 * day, today + day]
+  if (id === 'custom' && custom.from) {
+    const from = Date.parse(`${custom.from}T00:00:00+05:00`)
+    const to = Date.parse(`${custom.to || custom.from}T00:00:00+05:00`) + day
+    return [from, Math.max(to, from + day)]
+  }
+  return [today, today + day]
+}
+
+export function pktDateInput(ms) {
+  return new Date(ms + PKT_OFFSET_MS).toISOString().slice(0, 10)
 }
 
 export function firstName(name) {

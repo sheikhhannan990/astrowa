@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { supabase, fetchPaged } from './supabaseClient'
 import { getConfig } from './api'
 
-const ORDER_DAYS = 14
+// A month of orders, so Yesterday / Last 7 days / 30 days filters are instant.
+const ORDER_DAYS = 31
 
 function byLastMessageDesc(a, b) {
   const ta = a.last_message_at ? Date.parse(a.last_message_at) : 0

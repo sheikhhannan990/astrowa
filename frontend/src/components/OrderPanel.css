@@ -584,3 +584,25 @@
     font-size: 16px;
   }
 }
+
+.op-star {
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--wa-panel-border);
+  background: #fff;
+  color: #8696a0;
+  white-space: nowrap;
+}
+
+.op-star.is-on {
+  background: #fff3c4;
+  border-color: #f2e1a6;
+  color: #8a6100;
+}
+
+.op-btn-wa {
+  color: #00664f;
+  border-color: #bfe6d6;
+}

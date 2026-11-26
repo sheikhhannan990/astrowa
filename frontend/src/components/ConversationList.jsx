@@ -66,6 +66,7 @@ function formatPhone(phone) {
 
 const FILTERS = [
   { id: 'all', label: 'All' },
+  { id: 'important', label: '⭐ Important' },
   { id: 'unread', label: 'Unread' },
   { id: 'confirmed', label: 'Confirmed' },
   { id: 'pending', label: 'Pending' },
@@ -134,6 +135,7 @@ export default function ConversationList({
   onFilterChange,
   counts,
   staff,
+  importantIds,
 }) {
   const isAdmin = staff?.role === 'admin'
   // Tag-action dropdown state. We track the open menu's screen coordinates
@@ -268,6 +270,7 @@ export default function ConversationList({
 
   const emptyMessage = (() => {
     if (searchTerm) return 'No matches found'
+    if (filter === 'important') return 'No orders marked important'
     if (filter === 'cancelled') return 'No cancelled conversations'
     if (filter === 'unread') return 'No unread conversations'
     if (filter === 'pending') return 'No conversations awaiting customer reply'
@@ -466,6 +469,7 @@ export default function ConversationList({
                 <div className="cl-row">
                   <div className="cl-row-top">
                     <span className="cl-name truncate">
+                      {importantIds?.has(conversation.id) && <span className="cl-star" title="Important">★ </span>}
                       {conversation.customer_name || 'Unknown'}
                     </span>
                     <span

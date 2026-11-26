@@ -20,6 +20,12 @@ export default function Inbox({
   // ChatWindow marks a chat read; patch the row locally.
   const handleConversationRead = (conversationId) => patchConversation(conversationId, { unread_count: 0 })
 
+  // Chats with any order starred as important.
+  const importantIds = useMemo(
+    () => new Set(orders.filter((o) => (o.flags || []).includes('important')).map((o) => o.conversation_id)),
+    [orders],
+  )
+
   const chatOrders = useMemo(() => {
     if (!selectedConversation) return []
     return orders
@@ -46,6 +52,7 @@ export default function Inbox({
   const counts = conversations.reduce(
     (acc, c) => {
       acc.all += 1
+      if (importantIds.has(c.id)) acc.important += 1
       if (c.is_cancelled) {
         acc.cancelled += 1
         return acc
@@ -61,7 +68,7 @@ export default function Inbox({
       if (isBankDeposit(c)) acc.bankdeposit += 1
       return acc
     },
-    { all: 0, unread: 0, pending: 0, confirmed: 0, fulfilled: 0, cancelled: 0, notwa: 0, bankdeposit: 0 }
+    { all: 0, important: 0, unread: 0, pending: 0, confirmed: 0, fulfilled: 0, cancelled: 0, notwa: 0, bankdeposit: 0 }
   )
 
   const filteredConversations = conversations.filter((conv) => {
@@ -69,6 +76,8 @@ export default function Inbox({
       // All really means all — cancelled chats stay visible here (tagged
       // "Cancelled") so a customer who cancels doesn't vanish from the main
       // list. The Cancelled tab still exists to see only those.
+    } else if (filter === 'important') {
+      if (!importantIds.has(conv.id)) return false
     } else if (filter === 'cancelled') {
       if (!conv.is_cancelled) return false
     } else if (filter === 'notwa') {
@@ -117,6 +126,7 @@ export default function Inbox({
       onFilterChange={setFilter}
       counts={counts}
       staff={staff}
+      importantIds={importantIds}
     />
   )
 
