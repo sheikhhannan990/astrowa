@@ -611,3 +611,45 @@ button.td-kpi:not(:disabled):hover {
     font-size: 16px;
   }
 }
+
+/* ---------- Who's using this inbox ---------- */
+.who-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.who-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--wa-panel-border);
+  background: #fff;
+  text-align: left;
+}
+
+.who-btn:hover {
+  background: #f1fbf7;
+  border-color: #bfe6d6;
+}
+
+.who-initial {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--wa-accent);
+  color: #fff;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.who-name {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--wa-text-primary);
+}

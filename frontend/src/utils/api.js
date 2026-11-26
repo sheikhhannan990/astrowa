@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { supabase } from './supabaseClient'
+import { getCurrentStaffId } from './currentStaff'
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
 
@@ -14,12 +14,11 @@ const apiClient = axios.create({
   },
 })
 
-// Every request carries the logged-in user's access token; the backend
-// checks it and records who did what.
-apiClient.interceptors.request.use(async (config) => {
-  const { data } = await supabase.auth.getSession()
-  const token = data?.session?.access_token
-  if (token) config.headers.Authorization = `Bearer ${token}`
+// Every request says which team member is using this device, so the
+// backend can record who did what.
+apiClient.interceptors.request.use((config) => {
+  const staffId = getCurrentStaffId()
+  if (staffId) config.headers['X-Staff-Id'] = staffId
   return config
 })
 

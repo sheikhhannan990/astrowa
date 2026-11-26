@@ -1,35 +1,31 @@
--- Phase 1: team accounts, order workflow, notes, follow-ups, activity log.
+-- Phase 1: team names, order workflow, notes, follow-ups, activity log.
 --
 -- Run once in Supabase → SQL Editor. Safe to re-run.
 -- This file only ADDS things — the current inbox keeps working after you
--- run it. The follow-up file 2026_11_phase1_lockdown.sql (run later, once
--- you can log in to the new inbox) is what closes public access.
+-- run it. No logins: access to the inbox stays exactly as it is today.
 
 -- ---------- Team members ----------
--- One row per person allowed into the inbox. Accounts themselves live in
--- Supabase Auth; this table says who is staff and what role they have.
+-- The names people pick on their device ("who's using this inbox"), used
+-- to record who did what. No passwords or logins.
 create table if not exists public.staff (
-  user_id     uuid primary key references auth.users(id) on delete cascade,
+  user_id     uuid primary key default gen_random_uuid(),
   name        text not null,
   email       text,
   role        text not null default 'agent' check (role in ('admin', 'agent')),
   active      boolean not null default true,
   created_at  timestamptz not null default now()
 );
+-- (In case an earlier version of this file linked staff to logins.)
+alter table public.staff drop constraint if exists staff_user_id_fkey;
+alter table public.staff alter column user_id set default gen_random_uuid();
 alter table public.staff enable row level security;
-
-create or replace function public.is_staff() returns boolean
-language sql stable security definer set search_path = public as $$
-  select exists (select 1 from public.staff where user_id = auth.uid() and active)
-$$;
-
-create or replace function public.is_admin() returns boolean
-language sql stable security definer set search_path = public as $$
-  select exists (select 1 from public.staff where user_id = auth.uid() and active and role = 'admin')
-$$;
-
 drop policy if exists staff_read on public.staff;
-create policy staff_read on public.staff for select to authenticated using (public.is_staff());
+create policy staff_read on public.staff for select to anon, authenticated using (true);
+
+-- Start with the owner as admin; add your team from the Team page.
+insert into public.staff (name, role)
+select 'Hannan', 'admin'
+where not exists (select 1 from public.staff);
 
 -- ---------- Orders (one row per Shopify order) ----------
 create table if not exists public.orders (
@@ -66,7 +62,7 @@ create index if not exists orders_conversation_idx on public.orders (conversatio
 create index if not exists orders_stage_idx on public.orders (stage);
 alter table public.orders enable row level security;
 drop policy if exists orders_read on public.orders;
-create policy orders_read on public.orders for select to authenticated using (public.is_staff());
+create policy orders_read on public.orders for select to anon, authenticated using (true);
 
 -- ---------- Internal notes (never sent to the customer) ----------
 create table if not exists public.notes (
@@ -83,7 +79,7 @@ create index if not exists notes_conversation_idx on public.notes (conversation_
 create index if not exists notes_phone_idx on public.notes (phone);
 alter table public.notes enable row level security;
 drop policy if exists notes_read on public.notes;
-create policy notes_read on public.notes for select to authenticated using (public.is_staff());
+create policy notes_read on public.notes for select to anon, authenticated using (true);
 
 -- ---------- Follow-ups / reminders (internal only, nothing is sent) ----------
 create table if not exists public.followups (
@@ -103,7 +99,7 @@ create index if not exists followups_open_idx on public.followups (due_at) where
 create index if not exists followups_conversation_idx on public.followups (conversation_id);
 alter table public.followups enable row level security;
 drop policy if exists followups_read on public.followups;
-create policy followups_read on public.followups for select to authenticated using (public.is_staff());
+create policy followups_read on public.followups for select to anon, authenticated using (true);
 
 -- ---------- Activity log (who did what, when) ----------
 create table if not exists public.activity (
@@ -121,12 +117,11 @@ create index if not exists activity_created_idx on public.activity (created_at d
 create index if not exists activity_actor_idx on public.activity (actor_id, created_at desc);
 alter table public.activity enable row level security;
 drop policy if exists activity_read on public.activity;
-create policy activity_read on public.activity for select to authenticated using (public.is_admin());
+create policy activity_read on public.activity for select to anon, authenticated using (true);
 
--- Read access for logged-in users (rows are still filtered by the policies
--- above); all writes go through the backend.
-grant select on public.staff, public.orders, public.notes, public.followups, public.activity to authenticated;
-revoke all on public.staff, public.orders, public.notes, public.followups, public.activity from anon;
+-- The inbox reads these directly (no login, same as chats); all writes go
+-- through the backend.
+grant select on public.staff, public.orders, public.notes, public.followups, public.activity to anon, authenticated;
 
 -- ---------- New columns on existing tables ----------
 alter table public.conversations add column if not exists needs_reply boolean not null default false;
@@ -140,16 +135,11 @@ alter table public.quick_replies add column if not exists last_used_at timestamp
 create index if not exists messages_conversation_created_idx on public.messages (conversation_id, created_at);
 create index if not exists conversations_needs_reply_idx on public.conversations (waiting_since) where needs_reply;
 
--- Logged-in staff can read chats and mark them as read. These policies sit
--- alongside whatever public access exists today; the lockdown file removes
--- the public access later.
+-- Remove policies from an earlier version of this file that tied chat
+-- access to logins (chat access stays exactly as it is today).
 drop policy if exists conversations_staff_read on public.conversations;
-create policy conversations_staff_read on public.conversations for select to authenticated using (public.is_staff());
 drop policy if exists conversations_staff_update on public.conversations;
-create policy conversations_staff_update on public.conversations for update to authenticated
-  using (public.is_staff()) with check (public.is_staff());
 drop policy if exists messages_staff_read on public.messages;
-create policy messages_staff_read on public.messages for select to authenticated using (public.is_staff());
 
 -- ---------- Quick reply categories and usage ----------
 update public.quick_replies set category = 'Payment'

@@ -114,7 +114,7 @@ def _ensure_cors_headers(resp):
         resp.headers.setdefault("Vary", "Origin")
         resp.headers.setdefault(
             "Access-Control-Allow-Headers",
-            "Content-Type, Authorization, X-Requested-With",
+            "Content-Type, Authorization, X-Requested-With, X-Staff-Id",
         )
         resp.headers.setdefault(
             "Access-Control-Allow-Methods",
@@ -222,62 +222,50 @@ def release_event(key):
 
 
 # =========================
-# TEAM LOGIN, ROLES & ACTIVITY LOG
+# TEAM MEMBERS & ACTIVITY LOG
 # =========================
 #
-# Every inbox request carries the user's Supabase Auth access token
-# (Authorization: Bearer …). We check it with Supabase, then look the user
-# up in the staff table. Only active staff get in; some actions are
-# admin-only. Webhooks (Shopify / WhatsApp) don't use this.
+# No login: each device picks "who's using this inbox" once and sends that
+# staff id in the X-Staff-Id header. It's used to record who did what (for
+# the activity log), not to restrict access.
 
-_AUTH_CACHE = {}          # token -> (expires_at, staff dict)
-_AUTH_CACHE_SECONDS = 60
-_AUTH_LOCK = threading.Lock()
+_STAFF_CACHE = {}         # staff id -> (expires_at, row)
+_STAFF_CACHE_SECONDS = 60
+_STAFF_LOCK = threading.Lock()
+_UNKNOWN_STAFF = {"user_id": None, "name": "Unknown", "role": "agent", "active": True}
 
 
-def _staff_for_token(token):
+def _staff_for_id(staff_id):
+    if not staff_id or not re.fullmatch(r"[0-9a-fA-F-]{36}", staff_id):
+        return None
     now = time.time()
-    with _AUTH_LOCK:
-        hit = _AUTH_CACHE.get(token)
+    with _STAFF_LOCK:
+        hit = _STAFF_CACHE.get(staff_id)
         if hit and hit[0] > now:
             return hit[1]
     try:
-        user_resp = supabase.auth.get_user(token)
-        user = getattr(user_resp, "user", None)
-        user_id = getattr(user, "id", None)
+        rows = supabase.table("staff").select("*").eq("user_id", staff_id).limit(1).execute().data or []
     except Exception as e:
-        log.info(f"auth: token rejected: {type(e).__name__}")
+        log.warning(f"staff lookup failed: {e}")
         return None
-    if not user_id:
-        return None
-    rows = (
-        supabase.table("staff").select("*").eq("user_id", user_id).limit(1).execute()
-    ).data or []
-    staff = rows[0] if rows and rows[0].get("active") else None
-    with _AUTH_LOCK:
-        if len(_AUTH_CACHE) > 500:
-            _AUTH_CACHE.clear()
-        _AUTH_CACHE[token] = (now + _AUTH_CACHE_SECONDS, staff)
+    staff = rows[0] if rows else None
+    with _STAFF_LOCK:
+        if len(_STAFF_CACHE) > 200:
+            _STAFF_CACHE.clear()
+        _STAFF_CACHE[staff_id] = (now + _STAFF_CACHE_SECONDS, staff)
     return staff
 
 
-def require_staff(admin=False):
-    """Route decorator: 401 without a valid login, 403 for non-staff (or
-    non-admins on admin routes). The staff row is passed as `staff`."""
+def require_staff():
+    """Route decorator: passes the team member using this device as `staff`
+    (or "Unknown" if the device hasn't picked a name). Never blocks — the
+    inbox stays open to anyone with the link, as before."""
     def wrap(fn):
         @functools.wraps(fn)
         def inner(*args, **kwargs):
             if request.method == "OPTIONS":
                 return "", 204
-            header = request.headers.get("Authorization", "")
-            token = header[7:].strip() if header.lower().startswith("bearer ") else ""
-            if not token:
-                return jsonify({"success": False, "error": "Please log in."}), 401
-            staff = _staff_for_token(token)
-            if not staff:
-                return jsonify({"success": False, "error": "Your account doesn't have access to the inbox."}), 403
-            if admin and staff.get("role") != "admin":
-                return jsonify({"success": False, "error": "Only an admin can do this."}), 403
+            staff = _staff_for_id(request.headers.get("X-Staff-Id", "").strip()) or _UNKNOWN_STAFF
             return fn(*args, staff=staff, **kwargs)
         return inner
     return wrap
@@ -2076,7 +2064,7 @@ def _purge_conversations(conversation_ids):
 
 
 @app.route("/conversations/<conversation_id>", methods=["DELETE", "OPTIONS"])
-@require_staff(admin=True)
+@require_staff()
 def delete_conversation(conversation_id, staff):
     """Hard-delete a single conversation and its messages.
 
@@ -2094,7 +2082,7 @@ def delete_conversation(conversation_id, staff):
 
 
 @app.route("/conversations/bulk-delete", methods=["POST", "OPTIONS"])
-@require_staff(admin=True)
+@require_staff()
 def bulk_delete_conversations(staff):
     """Hard-delete multiple conversations in one request.
 
@@ -2562,31 +2550,24 @@ def workflow_config(staff):
 
 
 @app.route("/team", methods=["GET", "POST", "OPTIONS"])
-@require_staff(admin=True)
+@require_staff()
 def team(staff):
     if request.method == "GET":
         rows = supabase.table("staff").select("*").order("created_at").execute().data or []
         return jsonify({"success": True, "team": rows}), 200
 
     data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
-    email = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
+    name = (data.get("name") or "").strip()[:60]
     role = data.get("role") if data.get("role") in ("admin", "agent") else "agent"
-    if not name or not email or len(password) < 8:
-        return jsonify({"success": False, "error": "Name, email and a password of at least 8 characters are required."}), 400
-    try:
-        created = supabase.auth.admin.create_user({"email": email, "password": password, "email_confirm": True})
-        user_id = created.user.id
-    except Exception as e:
-        return jsonify({"success": False, "error": f"Could not create the login: {e}"}), 400
-    supabase.table("staff").insert({"user_id": user_id, "name": name, "email": email, "role": role}).execute()
-    log_activity(staff, "team", f"Added {name} ({role})", meta={"email": email})
-    return jsonify({"success": True}), 201
+    if not name:
+        return jsonify({"success": False, "error": "Enter a name."}), 400
+    rows = supabase.table("staff").insert({"name": name, "role": role}).execute().data or []
+    log_activity(staff, "team", f"Added {name} ({role})")
+    return jsonify({"success": True, "member": rows[0] if rows else None}), 201
 
 
 @app.route("/team/<user_id>", methods=["PATCH", "OPTIONS"])
-@require_staff(admin=True)
+@require_staff()
 def team_member(user_id, staff):
     data = request.get_json(silent=True) or {}
     rows = supabase.table("staff").select("*").eq("user_id", user_id).limit(1).execute().data or []
@@ -2594,29 +2575,19 @@ def team_member(user_id, staff):
         return jsonify({"success": False, "error": "Team member not found"}), 404
     member = rows[0]
     fields, changes = {}, []
-    if "name" in data and (data["name"] or "").strip():
-        fields["name"] = data["name"].strip()
-        changes.append("renamed")
+    if (data.get("name") or "").strip():
+        fields["name"] = data["name"].strip()[:60]
+        changes.append(f"renamed to {fields['name']}")
     if data.get("role") in ("admin", "agent") and data["role"] != member["role"]:
         fields["role"] = data["role"]
         changes.append(f"role → {data['role']}")
     if "active" in data and bool(data["active"]) != member["active"]:
         fields["active"] = bool(data["active"])
-        changes.append("re-activated" if data["active"] else "deactivated")
-    if user_id == staff["user_id"] and (fields.get("active") is False or fields.get("role") == "agent"):
-        return jsonify({"success": False, "error": "You can't deactivate or demote yourself."}), 400
-    if data.get("password"):
-        if len(data["password"]) < 8:
-            return jsonify({"success": False, "error": "Password must be at least 8 characters."}), 400
-        try:
-            supabase.auth.admin.update_user_by_id(user_id, {"password": data["password"]})
-            changes.append("password reset")
-        except Exception as e:
-            return jsonify({"success": False, "error": f"Could not reset password: {e}"}), 400
+        changes.append("re-activated" if data["active"] else "removed")
     if fields:
         supabase.table("staff").update(fields).eq("user_id", user_id).execute()
-    with _AUTH_LOCK:
-        _AUTH_CACHE.clear()   # role/active changes apply immediately
+    with _STAFF_LOCK:
+        _STAFF_CACHE.clear()
     if changes:
         log_activity(staff, "team", f"{member['name']}: {', '.join(changes)}")
     return jsonify({"success": True}), 200

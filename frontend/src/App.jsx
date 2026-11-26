@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from './utils/supabaseClient'
+import { getCurrentStaffId, setCurrentStaffId } from './utils/currentStaff'
 import useWorkspaceData from './utils/useWorkspaceData'
 import Inbox from './views/Inbox'
 import Today from './views/Today'
 import Activity from './views/Activity'
 import Team from './views/Team'
-import Login from './views/Login'
 import './App.css'
 
 const NAV = [
@@ -24,56 +24,68 @@ function Icon({ d }) {
 }
 
 export default function App() {
-  const [session, setSession] = useState(undefined) // undefined = still checking
-  const [staff, setStaff] = useState(undefined)
-  const [staffError, setStaffError] = useState(null)
+  const [team, setTeam] = useState(undefined) // undefined = loading
+  const [loadError, setLoadError] = useState(null)
+  const [staffId, setStaffId] = useState(getCurrentStaffId())
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session || null))
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s || null))
-    return () => sub.subscription.unsubscribe()
-  }, [])
-
-  useEffect(() => {
-    if (!session) {
-      setStaff(session === null ? null : undefined)
-      return
-    }
-    setStaff(undefined)
     supabase
       .from('staff')
       .select('*')
-      .eq('user_id', session.user.id)
-      .maybeSingle()
+      .order('created_at')
       .then(({ data, error }) => {
-        if (error) setStaffError(error.message)
-        setStaff(data && data.active ? data : null)
+        if (error) setLoadError(error.message)
+        setTeam(data || [])
       })
-  }, [session?.user?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [staffId])
 
-  if (session === undefined || (session && staff === undefined)) {
-    return <div className="app-splash">Loading…</div>
+  const choose = (id) => {
+    setCurrentStaffId(id)
+    setStaffId(id)
   }
-  if (!session) return <Login />
-  if (!staff) {
-    return (
-      <div className="app-splash">
-        <div className="app-noaccess">
-          <h2>No access</h2>
-          <p>
-            {session.user.email} isn't set up as a team member yet, or their access was switched off.
-            Ask the admin to add you on the Team page.
-          </p>
-          {staffError && <p className="td-small">({staffError})</p>}
-          <button type="button" className="td-btn" onClick={() => supabase.auth.signOut()}>Sign out</button>
-        </div>
-      </div>
-    )
-  }
-  return <Workspace staff={staff} />
+
+  if (team === undefined) return <div className="app-splash">Loading…</div>
+  const staff = team.find((m) => m.user_id === staffId && m.active)
+  if (!staff) return <WhoAreYou team={team.filter((m) => m.active)} onChoose={choose} error={loadError} />
+  return <Workspace key={staff.user_id} staff={staff} onSwitchUser={() => choose(null)} />
 }
 
-function Workspace({ staff }) {
+// One-time "who's using this device" — remembered in this browser so it's
+// never asked again. Not a password, just so actions are recorded under
+// the right name.
+function WhoAreYou({ team, onChoose, error }) {
+  return (
+    <div className="login">
+      <div className="login-card">
+        <div className="login-brand">
+          <span className="login-logo" aria-hidden>💡</span>
+          <div>
+            <h1>Who's using this inbox?</h1>
+            <p>Pick your name once — this device will remember it.</p>
+          </div>
+        </div>
+        {error && (
+          <div className="login-error">
+            Couldn't load the team list ({error}). Has the phase 1 SQL been run in Supabase?
+          </div>
+        )}
+        <div className="who-list">
+          {team.map((m) => (
+            <button key={m.user_id} type="button" className="who-btn" onClick={() => onChoose(m.user_id)}>
+              <span className="who-initial">{(m.name || '?')[0].toUpperCase()}</span>
+              <span className="who-name">{m.name}</span>
+              <span className="td-small">{m.role === 'admin' ? 'Admin' : 'Agent'}</span>
+            </button>
+          ))}
+        </div>
+        {!error && team.length === 0 && <p className="login-help">No team members yet — run the phase 1 SQL in Supabase.</p>}
+        <p className="login-help">New team member? Ask the admin to add your name on the Team page.</p>
+      </div>
+    </div>
+  )
+}
+
+function Workspace({ staff, onSwitchUser }) {
   const data = useWorkspaceData()
   const [view, setView] = useState('today')
   const [selectedConversationId, setSelectedConversationId] = useState(null)
@@ -135,9 +147,9 @@ function Workspace({ staff }) {
             ))}
             <span className="ws-rail-spacer" />
             <div className="ws-user" title={`${staff.name} (${staff.role})`}>{(staff.name || '?')[0].toUpperCase()}</div>
-            <button type="button" className="ws-nav ws-signout" onClick={() => supabase.auth.signOut()} title="Sign out">
+            <button type="button" className="ws-nav ws-signout" onClick={onSwitchUser} title={`Using as ${staff.name} — switch user`}>
               <Icon d="M10 17v-3H3v-4h7V7l5 5-5 5zm9-14H12v2h7v14h-7v2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" />
-              <span>Sign out</span>
+              <span>Switch</span>
             </button>
           </nav>
         )}
@@ -151,9 +163,9 @@ function Workspace({ staff }) {
                 {badges[n.id] > 0 && <span className="ws-badge">{badges[n.id]}</span>}
               </button>
             ))}
-            <button type="button" className="ws-tab" onClick={() => supabase.auth.signOut()}>
+            <button type="button" className="ws-tab" onClick={onSwitchUser}>
               <Icon d="M10 17v-3H3v-4h7V7l5 5-5 5zm9-14H12v2h7v14h-7v2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" />
-              <span>Sign out</span>
+              <span>{staff.name}</span>
             </button>
           </nav>
         )}
