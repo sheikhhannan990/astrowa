@@ -1,0 +1,189 @@
+import { useMemo, useState } from 'react'
+import ConversationList from '../components/ConversationList'
+import ChatWindow from '../components/ChatWindow'
+
+// The chat inbox: conversation list + chat window (with the order panel).
+export default function Inbox({
+  data, staff, selectedConversationId, onSelectConversation, focusOrderId, isMobileView,
+}) {
+  const { conversations, orders, followups, config, loading, error, patchConversation, upsertOrder } = data
+  const [searchTerm, setSearchTerm] = useState('')
+  // Filter pills: 'all' | 'waiting' | 'unread' | 'pending' | ... | 'cancelled'.
+  // 'all' shows every chat including cancelled ones; 'cancelled' shows only them.
+  const [filter, setFilter] = useState('all')
+
+  const selectedConversation =
+    conversations.find((c) => c.id === selectedConversationId) || null
+
+  const handleSelectConversation = (conversation) => onSelectConversation(conversation?.id ?? null)
+  const handleBackFromChat = () => onSelectConversation(null)
+  // ChatWindow marks a chat read; patch the row locally.
+  const handleConversationRead = (conversationId) => patchConversation(conversationId, { unread_count: 0 })
+
+  const chatOrders = useMemo(() => {
+    if (!selectedConversation) return []
+    return orders
+      .filter((o) => o.conversation_id === selectedConversation.id || o.phone === selectedConversation.phone)
+      .sort((a, b) => Date.parse(b.order_created_at) - Date.parse(a.order_created_at))
+  }, [orders, selectedConversation])
+  const chatFollowups = useMemo(
+    () => (selectedConversation ? followups.filter((f) => f.conversation_id === selectedConversation.id) : []),
+    [followups, selectedConversation],
+  )
+
+  // 'pending'   = awaiting customer action (COD confirmation OR bank deposit screenshot)
+  // 'confirmed' = customer has acted (tapped Confirm) or merchant has marked
+  //               bank deposit as paid — i.e. ready for the merchant to ship
+  const isPending = (c) =>
+    c.last_template === 'confirmation' || c.last_template === 'bank_pending'
+  const isConfirmed = (c) =>
+    c.last_template === 'confirmed' || c.last_template === 'paid'
+  // Bank deposit orders, paid or not — a cross-cutting view over the same
+  // last_template values already counted under Pending ('bank_pending') and
+  // Confirmed ('paid'), so this doesn't change those counts, just adds a
+  // dedicated way to see all bank-deposit orders in one place.
+  const isBankDeposit = (c) =>
+    c.last_template === 'bank_pending' || c.last_template === 'paid'
+
+  // Counts driven by the unfiltered list so the pill badges always reflect
+  // reality even when the user is mid-search.
+  const counts = conversations.reduce(
+    (acc, c) => {
+      acc.all += 1
+      if (c.needs_reply && !c.is_cancelled) acc.waiting += 1
+      if (c.is_cancelled) {
+        acc.cancelled += 1
+        return acc
+      }
+      if (c.is_not_on_whatsapp) {
+        acc.notwa += 1
+        return acc
+      }
+      if ((c.unread_count || 0) > 0) acc.unread += 1
+      if (isPending(c)) acc.pending += 1
+      else if (isConfirmed(c)) acc.confirmed += 1
+      else if (c.last_template === 'fulfilled') acc.fulfilled += 1
+      if (isBankDeposit(c)) acc.bankdeposit += 1
+      return acc
+    },
+    { all: 0, waiting: 0, unread: 0, pending: 0, confirmed: 0, fulfilled: 0, cancelled: 0, notwa: 0, bankdeposit: 0 }
+  )
+
+  const filteredConversations = conversations.filter((conv) => {
+    if (filter === 'all') {
+      // All really means all — cancelled chats stay visible here (tagged
+      // "Cancelled") so a customer who cancels doesn't vanish from the main
+      // list. The Cancelled tab still exists to see only those.
+    } else if (filter === 'waiting') {
+      if (!conv.needs_reply || conv.is_cancelled) return false
+    } else if (filter === 'cancelled') {
+      if (!conv.is_cancelled) return false
+    } else if (filter === 'notwa') {
+      if (conv.is_cancelled) return false
+      if (!conv.is_not_on_whatsapp) return false
+    } else if (filter === 'bankdeposit') {
+      if (conv.is_cancelled) return false
+      if (!isBankDeposit(conv)) return false
+    } else {
+      // Cancelled stays out of the action-oriented tabs
+      // (Unread/Pending/Confirmed/Fulfilled).
+      if (conv.is_cancelled) return false
+      // Customers we can't reach via WhatsApp shouldn't pollute the
+      // action-required filters; they live only in 'all' + 'notwa'.
+      if (
+        conv.is_not_on_whatsapp &&
+        (filter === 'pending' || filter === 'confirmed' || filter === 'unread')
+      ) {
+        return false
+      }
+      if (filter === 'unread' && !((conv.unread_count || 0) > 0)) return false
+      if (filter === 'pending' && !isPending(conv)) return false
+      if (filter === 'confirmed' && !isConfirmed(conv)) return false
+      if (filter === 'fulfilled' && conv.last_template !== 'fulfilled') return false
+    }
+
+    if (!searchTerm) return true
+    const searchLower = searchTerm.toLowerCase()
+    return (
+      (conv.customer_name && conv.customer_name.toLowerCase().includes(searchLower)) ||
+      (conv.phone && conv.phone.includes(searchLower)) ||
+      (conv.order_id && String(conv.order_id).toLowerCase().includes(searchLower))
+    )
+  })
+
+  const list = (
+    <ConversationList
+      conversations={filteredConversations}
+      selectedConversation={selectedConversation}
+      onSelectConversation={handleSelectConversation}
+      loading={loading}
+      error={error}
+      searchTerm={searchTerm}
+      onSearchChange={setSearchTerm}
+      filter={filter}
+      onFilterChange={setFilter}
+      counts={counts}
+      staff={staff}
+    />
+  )
+
+  const chat = selectedConversation && (
+    <ChatWindow
+      conversation={selectedConversation}
+      orders={chatOrders}
+      followups={chatFollowups}
+      config={config}
+      staff={staff}
+      focusOrderId={focusOrderId}
+      onOrderUpdated={upsertOrder}
+      onConversationPatch={patchConversation}
+      onBack={isMobileView ? handleBackFromChat : undefined}
+      onConversationUpdate={handleConversationRead}
+      isMobile={isMobileView}
+    />
+  )
+
+  if (isMobileView) {
+    return <div className="mobile-view">{chat || list}</div>
+  }
+  return (
+    <div className="inbox-desktop">
+      <aside className="sidebar">{list}</aside>
+      <main className="main-content">
+        {chat || (
+          <div className="no-selection">
+            <div className="no-selection-illustration" aria-hidden>
+              <svg viewBox="0 0 303 172" width="320" height="180">
+                <defs>
+                  <linearGradient id="lg" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0" stopColor="#daf7dc" />
+                    <stop offset="1" stopColor="#b9eac4" />
+                  </linearGradient>
+                </defs>
+                <path
+                  fill="url(#lg)"
+                  d="M229.6 9.8c-7-1.2-14.1-1.7-21.1-1.7-78.9 0-128 71.7-128 128 0 12.9 1.6 25.5 4.6 37.4-1.4-2.4-2.5-5-3.2-7.7-3.7-13.7-1.5-28 7.4-39.3 7.4-9.5 18-15.7 30-17.4 4-13.2 11.5-25.1 21.7-34.6 14.7-13.6 33.9-21.1 54-21.1 11.2 0 22.1 2.3 32 6.7-1.4-1-2.9-1.9-4.4-2.6-3.5-1.7-7.2-3-11-4.1-3-.9-6.1-1.6-9.3-2.2 3.5-.7 7-1.2 10.6-1.4 5.9-.3 11.8 0 17.7 1z"
+                  opacity="0.5"
+                />
+                <circle cx="150" cy="86" r="42" fill="#fff" opacity="0.6" />
+                <path
+                  d="M150 56c-19.3 0-35 13.4-35 30 0 9.2 4.9 17.5 12.6 23l-2.5 11.5c-.3 1.3 1.1 2.3 2.3 1.6l13.4-7.2c2.9.8 6 1.2 9.2 1.2 19.3 0 35-13.4 35-30s-15.7-30-35-30z"
+                  fill="#00a884"
+                  opacity="0.85"
+                />
+              </svg>
+            </div>
+            <h2>AstroLamps WhatsApp</h2>
+            <p>
+              Send and receive messages with your customers. Select a conversation from
+              the sidebar to start chatting.
+            </p>
+            <div className="no-selection-footer">
+              <span>🔒 End-to-end encrypted on WhatsApp</span>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}

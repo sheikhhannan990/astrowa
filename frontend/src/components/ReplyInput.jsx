@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from 'react'
-import { sendMessage, sendMedia } from '../utils/api'
-import QuickReplies from './QuickReplies'
+import { sendMessage, sendMedia, markNoReplyNeeded, errorText } from '../utils/api'
+import QuickReplies, { loadQuickReplies } from './QuickReplies'
+import { fillVariables, suggestReplies, windowHoursLeft } from '../utils/workflow'
 import './ReplyInput.css'
 
 // WhatsApp's hard ceiling for any attachment (documents); images, videos
@@ -48,7 +49,7 @@ function attachmentKind(file) {
   return 'document'
 }
 
-export default function ReplyInput({ conversation }) {
+export default function ReplyInput({ conversation, order, config, lastIncoming, onOrderAction }) {
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState(null)
@@ -57,6 +58,9 @@ export default function ReplyInput({ conversation }) {
   const [recording, setRecording] = useState(false)
   const [recordSeconds, setRecordSeconds] = useState(0)
 
+  const [frequent, setFrequent] = useState([])
+  // Quick reply the current text came from, so its usage is counted.
+  const quickReplyIdRef = useRef(null)
   const wrapRef = useRef(null)
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -69,6 +73,16 @@ export default function ReplyInput({ conversation }) {
   // "/" at the very start of the box opens quick replies and filters them.
   const slashQuery = message.startsWith('/') && !message.includes('\n') ? message.slice(1) : null
   const quickRepliesOpen = showQuickReplies || slashQuery !== null
+
+  useEffect(() => {
+    loadQuickReplies()
+      .then((items) => setFrequent(items.filter((q) => q.use_count > 0).slice(0, 3)))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!message.trim()) quickReplyIdRef.current = null
+  }, [message])
 
   useEffect(() => {
     setMessage('')
@@ -134,7 +148,9 @@ export default function ReplyInput({ conversation }) {
     textareaRef.current?.focus()
   }
 
-  function handlePickQuickReply(body) {
+  function handlePickQuickReply(item) {
+    const body = fillVariables(item.body, { conversation, order, config })
+    quickReplyIdRef.current = item.id && !String(item.id).startsWith('default-') ? item.id : null
     setShowQuickReplies(false)
     setMessage((prev) => {
       // Slash-triggered or empty box → replace; otherwise append.
@@ -173,8 +189,12 @@ export default function ReplyInput({ conversation }) {
     setSending(true)
     setError(null)
     try {
-      await sendMessage(conversation.phone, text, conversation.id)
+      await sendMessage(conversation.phone, text, conversation.id, {
+        quickReplyId: quickReplyIdRef.current,
+        orderId: order?.id,
+      })
       setMessage('')
+      quickReplyIdRef.current = null
     } catch (err) {
       console.error('Failed to send message:', err)
       setError(err.response?.data?.error || 'Failed to send message')
@@ -286,6 +306,8 @@ export default function ReplyInput({ conversation }) {
   }
 
   const hasText = message.trim().length > 0
+  const windowClosed =
+    conversation.is_not_on_whatsapp || windowHoursLeft(conversation.last_customer_message_at) === null
   const canSend = hasText || !!attachment
 
   return (
@@ -295,6 +317,30 @@ export default function ReplyInput({ conversation }) {
           <span>{error}</span>
           <button onClick={() => setError(null)} aria-label="Dismiss">×</button>
         </div>
+      )}
+
+      {windowClosed && !attachment && !recording && (
+        <div className="ri-window-closed" role="note">
+          {conversation.is_not_on_whatsapp
+            ? 'This customer is not on WhatsApp — call them instead.'
+            : "WhatsApp's 24-hour reply window is closed (the customer hasn't messaged in a day). Messages will fail — call instead."}
+        </div>
+      )}
+
+      {!windowClosed && !message && !attachment && !recording && !quickRepliesOpen && (
+        <SuggestionRow
+          suggestions={suggestReplies({ lastIncoming, order, conversation, config })}
+          frequent={frequent}
+          needsReply={conversation.needs_reply}
+          onText={(text) => {
+            quickReplyIdRef.current = null
+            setMessage(text)
+            requestAnimationFrame(() => textareaRef.current?.focus())
+          }}
+          onQuickReply={handlePickQuickReply}
+          onAction={(action) => onOrderAction?.(action)}
+          onNoReply={() => markNoReplyNeeded(conversation.id).catch((err) => setError(errorText(err)))}
+        />
       )}
 
       {quickRepliesOpen && !recording && (
@@ -452,6 +498,33 @@ export default function ReplyInput({ conversation }) {
             </button>
           )}
         </form>
+      )}
+    </div>
+  )
+}
+
+// Suggested replies for the latest customer message, plus the team's most
+// used quick replies. Tapping one fills the box (it's never sent
+// automatically) so it can be edited first.
+function SuggestionRow({ suggestions, frequent, needsReply, onText, onQuickReply, onAction, onNoReply }) {
+  const chips = [
+    ...suggestions.map((s) => ({ key: s.id, label: s.label, primary: true, onClick: () => (s.action ? onAction(s.action) : onText(s.text)) })),
+    ...frequent
+      .filter((q) => !suggestions.some((s) => s.label === q.title))
+      .map((q) => ({ key: q.id, label: q.title, onClick: () => onQuickReply(q) })),
+  ].slice(0, 5)
+  if (!chips.length && !needsReply) return null
+  return (
+    <div className="ri-suggest" role="toolbar" aria-label="Suggested replies">
+      {chips.map((c) => (
+        <button key={c.key} type="button" className={`ri-chip ${c.primary ? 'is-primary' : ''}`} onClick={c.onClick}>
+          {c.primary ? '✨ ' : ''}{c.label}
+        </button>
+      ))}
+      {needsReply && (
+        <button type="button" className="ri-chip ri-chip-muted" onClick={onNoReply} title="Remove from the waiting list without replying">
+          No reply needed
+        </button>
       )}
     </div>
   )

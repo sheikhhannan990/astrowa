@@ -1,0 +1,119 @@
+import { useCallback, useEffect, useState } from 'react'
+import { supabase, fetchPaged } from './supabaseClient'
+import { getConfig } from './api'
+
+const ORDER_DAYS = 14
+
+function byLastMessageDesc(a, b) {
+  const ta = a.last_message_at ? Date.parse(a.last_message_at) : 0
+  const tb = b.last_message_at ? Date.parse(b.last_message_at) : 0
+  return tb - ta
+}
+
+// Merge one realtime postgres_changes event into a list of rows.
+function applyChange(list, payload, sort) {
+  if (payload.eventType === 'DELETE') {
+    const id = payload.old?.id
+    return id ? list.filter((r) => r.id !== id) : list
+  }
+  const row = payload.new
+  if (!row?.id) return list
+  const exists = list.some((r) => r.id === row.id)
+  const next = exists ? list.map((r) => (r.id === row.id ? { ...r, ...row } : r)) : [row, ...list]
+  return sort ? next.sort(sort) : next
+}
+
+// Chats, recent orders and open reminders, kept live with Supabase
+// realtime. Shared by the Today queue and the Inbox.
+export default function useWorkspaceData() {
+  const [conversations, setConversations] = useState([])
+  const [orders, setOrders] = useState([])
+  const [followups, setFollowups] = useState([])
+  const [config, setConfig] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  const fetchConversations = useCallback(async () => {
+    const { data, error: err } = await supabase
+      .from('conversations')
+      .select('*')
+      .order('last_message_at', { ascending: false })
+    if (err) throw err
+    setConversations(data || [])
+  }, [])
+
+  const fetchOrders = useCallback(async () => {
+    const since = new Date(Date.now() - ORDER_DAYS * 86400000).toISOString()
+    const rows = await fetchPaged((from, to) =>
+      supabase
+        .from('orders')
+        .select('*')
+        .gte('order_created_at', since)
+        .order('order_created_at', { ascending: false })
+        .range(from, to)
+    )
+    setOrders(rows)
+  }, [])
+
+  const fetchFollowups = useCallback(async () => {
+    const { data, error: err } = await supabase
+      .from('followups')
+      .select('*')
+      .is('done_at', null)
+      .order('due_at', { ascending: true })
+    if (err) throw err
+    setFollowups(data || [])
+  }, [])
+
+  const refreshAll = useCallback(async ({ silent = false } = {}) => {
+    try {
+      if (!silent) setLoading(true)
+      await Promise.all([fetchConversations(), fetchOrders(), fetchFollowups()])
+      setError(null)
+    } catch (err) {
+      console.error('Failed to load workspace data:', err)
+      setError(err.message || String(err))
+    } finally {
+      setLoading(false)
+    }
+  }, [fetchConversations, fetchOrders, fetchFollowups])
+
+  useEffect(() => {
+    refreshAll()
+    getConfig().then(setConfig).catch(() => setConfig(null))
+  }, [refreshAll])
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('workspace')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' },
+        (p) => setConversations((prev) => applyChange(prev, p, byLastMessageDesc)))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' },
+        (p) => setOrders((prev) => applyChange(prev, p)))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'followups' },
+        (p) => setFollowups((prev) =>
+          applyChange(prev, p).filter((f) => !f.done_at).sort((a, b) => Date.parse(a.due_at) - Date.parse(b.due_at))))
+      .subscribe((status) => {
+        // Full refresh on every (re)connect so nothing is missed.
+        if (status === 'SUBSCRIBED') refreshAll({ silent: true })
+      })
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [refreshAll])
+
+  const patchConversation = useCallback((id, fields) => {
+    setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, ...fields } : c)))
+  }, [])
+
+  // Apply an order returned by the API right away (realtime will confirm).
+  const upsertOrder = useCallback((order) => {
+    if (!order?.id) return
+    setOrders((prev) => applyChange(prev, { eventType: 'UPDATE', new: order }))
+  }, [])
+
+  return {
+    conversations, orders, followups, config, loading, error,
+    refreshAll, patchConversation, upsertOrder,
+  }
+}

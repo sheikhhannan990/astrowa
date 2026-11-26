@@ -2,6 +2,9 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../utils/supabaseClient'
 import MessageBubbles from './MessageBubbles'
 import ReplyInput from './ReplyInput'
+import OrderPanel from './OrderPanel'
+import { orderAction, errorText } from '../utils/api'
+import { STAGE_LABELS } from '../utils/workflow'
 import './ChatWindow.css'
 
 function formatPhone(phone) {
@@ -27,8 +30,14 @@ function formatAddress(addr) {
     .join('\n')
 }
 
-export default function ChatWindow({ conversation, onBack, onConversationUpdate, isMobile }) {
+export default function ChatWindow({
+  conversation, orders = [], followups = [], config, staff, focusOrderId,
+  onOrderUpdated, onBack, onConversationUpdate, isMobile,
+}) {
   const [messages, setMessages] = useState([])
+  const [notes, setNotes] = useState([])
+  // Order panel: open by default on wide screens, toggled on phones.
+  const [showOrder, setShowOrder] = useState(() => !isMobile && window.innerWidth >= 1200)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showAddress, setShowAddress] = useState(false)
@@ -42,6 +51,7 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
     if (!conversation?.id) return
 
     fetchMessages()
+    fetchNotes()
     markConversationAsRead()
 
     const subscription = supabase
@@ -66,6 +76,11 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
             )
           }
         }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'notes', filter: `conversation_id=eq.${conversation.id}` },
+        () => fetchNotes()
       )
       .subscribe()
 
@@ -129,6 +144,17 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
     }
   }
 
+  async function fetchNotes() {
+    // Notes on this chat, plus customer-level notes written on any of this
+    // customer's chats (matched by phone).
+    const { data, error: err } = await supabase
+      .from('notes')
+      .select('*')
+      .or(`conversation_id.eq.${conversation.id},phone.eq.${conversation.phone}`)
+      .order('created_at', { ascending: false })
+    if (!err) setNotes(data || [])
+  }
+
   async function markConversationAsRead() {
     // Only update if we have unread messages, to avoid unnecessary
     // realtime echoes when the user opens a chat that is already read.
@@ -142,9 +168,27 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
 
       if (err) throw err
 
-      onConversationUpdate?.()
+      onConversationUpdate?.(conversation.id)
     } catch (err) {
       console.error('Failed to mark conversation as read:', err)
+    }
+  }
+
+  useEffect(() => {
+    if (focusOrderId) setShowOrder(true)
+  }, [focusOrderId, conversation.id])
+
+  const currentOrder = orders.find((o) => o.id === focusOrderId) || orders[0] || null
+  const lastIncoming = [...messages].reverse().find((m) => m.direction === 'incoming') || null
+
+  async function runOrderAction(action) {
+    if (!currentOrder) return
+    try {
+      const res = await orderAction(currentOrder.id, action, action === 'mark_paid' ? { notify: true } : {})
+      if (res.order) onOrderUpdated?.(res.order)
+      if (res.warning) alert(res.warning)
+    } catch (err) {
+      alert(errorText(err))
     }
   }
 
@@ -171,7 +215,7 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
     }
   }
 
-  return (
+  const chat = (
     <div className={`chat-window ${isMobile ? 'is-mobile' : ''}`}>
       <header className="cw-header">
         {onBack && (
@@ -202,6 +246,19 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
         </div>
 
         <div className="cw-header-actions">
+          <button
+            type="button"
+            className={`cw-header-pill cw-order-btn ${showOrder ? 'is-open' : ''}`}
+            onClick={() => setShowOrder((v) => !v)}
+            aria-pressed={showOrder}
+            title="Order details, calls, notes and reminders"
+          >
+            <span>Order</span>
+            {currentOrder && (
+              <span className={`cw-stage cw-stage-${currentOrder.stage}`}>{STAGE_LABELS[currentOrder.stage]}</span>
+            )}
+            {followups.some((f) => Date.parse(f.due_at) < Date.now()) && <span className="cw-dot-alert" aria-label="Overdue reminder" />}
+          </button>
           {hasAddress && (
             <div className="cw-action-wrap">
               <button
@@ -326,13 +383,41 @@ export default function ChatWindow({ conversation, onBack, onConversationUpdate,
           </div>
         ) : (
           <>
-            <MessageBubbles messages={messages} />
+            <MessageBubbles messages={messages} notes={notes} />
             <div ref={messagesEndRef} />
           </>
         )}
       </div>
 
-      <ReplyInput conversation={conversation} />
+      <ReplyInput
+        conversation={conversation}
+        order={currentOrder}
+        config={config}
+        lastIncoming={lastIncoming}
+        onOrderAction={runOrderAction}
+      />
+    </div>
+  )
+
+  const panel = showOrder && (
+    <OrderPanel
+      conversation={conversation}
+      orders={orders}
+      followups={followups}
+      notes={notes}
+      config={config}
+      staff={staff}
+      focusOrderId={focusOrderId}
+      onOrderUpdated={onOrderUpdated}
+      onClose={() => setShowOrder(false)}
+      isMobile={isMobile}
+    />
+  )
+
+  return (
+    <div className="cw-shell">
+      {chat}
+      {panel}
     </div>
   )
 }

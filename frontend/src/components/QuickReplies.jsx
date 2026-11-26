@@ -10,6 +10,17 @@ import './QuickReplies.css'
 // Shared across every chat so switching conversations doesn't refetch.
 let cache = null // { items, persisted }
 
+export const QUICK_REPLY_CATEGORIES = ['General', 'Payment', 'Address', 'Orders', 'Delivery', 'Product']
+
+// Quick replies for other components (e.g. the order panel's address
+// buttons), using the same cache as the panel.
+export async function loadQuickReplies() {
+  if (cache) return cache.items
+  const res = await listQuickReplies()
+  cache = { items: res.quick_replies || [], persisted: res.persisted !== false }
+  return cache.items
+}
+
 // Instagram-style saved replies. Opened from the ⚡ button or by typing "/"
 // at the start of the message box (the text after "/" filters the list).
 // Picking one hands its text back to the composer so it can be tweaked
@@ -19,7 +30,7 @@ const QuickReplies = forwardRef(function QuickReplies({ query, onPick, onClose }
   const [persisted, setPersisted] = useState(cache?.persisted ?? true)
   const [loading, setLoading] = useState(!cache)
   const [error, setError] = useState(null)
-  const [editing, setEditing] = useState(null) // null | { id?, title, body }
+  const [editing, setEditing] = useState(null) // null | { id?, title, body, category }
   const [saving, setSaving] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
 
@@ -73,7 +84,7 @@ const QuickReplies = forwardRef(function QuickReplies({ query, onPick, onClose }
         return true
       }
       if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey && filtered[activeIndex]) {
-        onPick(filtered[activeIndex].body)
+        onPick(filtered[activeIndex])
         return true
       }
       if (e.key === 'Escape') {
@@ -93,10 +104,10 @@ const QuickReplies = forwardRef(function QuickReplies({ query, onPick, onClose }
     setError(null)
     try {
       if (editing.id) {
-        const res = await updateQuickReply(editing.id, title, body)
+        const res = await updateQuickReply(editing.id, title, body, editing.category)
         commit(items.map((it) => (it.id === editing.id ? res.quick_reply : it)))
       } else {
-        const res = await createQuickReply(title, body)
+        const res = await createQuickReply(title, body, editing.category)
         commit([...items, res.quick_reply])
       }
       setEditing(null)
@@ -128,7 +139,7 @@ const QuickReplies = forwardRef(function QuickReplies({ query, onPick, onClose }
           <button
             type="button"
             className="qr-new"
-            onClick={() => setEditing({ title: '', body: '' })}
+            onClick={() => setEditing({ title: '', body: '', category: 'General' })}
           >
             + New
           </button>
@@ -157,6 +168,19 @@ const QuickReplies = forwardRef(function QuickReplies({ query, onPick, onClose }
             rows={6}
             onChange={(e) => setEditing({ ...editing, body: e.target.value })}
           />
+          <div className="qr-form-row">
+            <select
+              className="qr-input qr-select"
+              value={editing.category || 'General'}
+              onChange={(e) => setEditing({ ...editing, category: e.target.value })}
+              aria-label="Category"
+            >
+              {QUICK_REPLY_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+            </select>
+            <span className="qr-vars">
+              Fill-ins: {'{name} {order} {total} {days} {city} {tracking}'}
+            </span>
+          </div>
           <div className="qr-form-actions">
             <button type="button" className="qr-btn" onClick={() => setEditing(null)}>
               Cancel
@@ -191,8 +215,12 @@ const QuickReplies = forwardRef(function QuickReplies({ query, onPick, onClose }
                 className={`qr-item ${idx === activeIndex ? 'is-active' : ''}`}
                 onMouseEnter={() => setActiveIndex(idx)}
               >
-                <button type="button" className="qr-item-main" onClick={() => onPick(item.body)}>
-                  <span className="qr-item-title">{item.title}</span>
+                <button type="button" className="qr-item-main" onClick={() => onPick(item)}>
+                  <span className="qr-item-title">
+                    {item.title}
+                    {item.category && <span className="qr-cat">{item.category}</span>}
+                    {item.use_count > 0 && <span className="qr-uses">used {item.use_count}×</span>}
+                  </span>
                   <span className="qr-item-body">{item.body}</span>
                 </button>
                 {persisted && (
@@ -202,7 +230,7 @@ const QuickReplies = forwardRef(function QuickReplies({ query, onPick, onClose }
                       className="qr-icon-btn"
                       title="Edit"
                       aria-label={`Edit ${item.title}`}
-                      onClick={() => setEditing({ id: item.id, title: item.title, body: item.body })}
+                      onClick={() => setEditing({ id: item.id, title: item.title, body: item.body, category: item.category || 'General' })}
                     >
                       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                         <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />

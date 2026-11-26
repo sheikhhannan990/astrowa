@@ -192,13 +192,42 @@ function renderMessageBody(message) {
   return <div className="mb-text">{renderMessageText(message.body)}</div>
 }
 
-export default function MessageBubbles({ messages }) {
+export default function MessageBubbles({ messages, notes = [] }) {
   let lastDateKey = null
   let lastDirection = null
 
+  // Internal notes sit in the timeline between messages, by time.
+  const items = notes.length
+    ? [...messages, ...notes.map((n) => ({ ...n, _note: true }))].sort(
+        (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at),
+      )
+    : messages
+
   return (
     <div className="mb-list">
-      {messages.map((message) => {
+      {items.map((message) => {
+        if (message._note) {
+          const currentKey = dateKey(message.created_at)
+          const showDate = currentKey !== lastDateKey
+          lastDateKey = currentKey
+          lastDirection = null
+          return (
+            <Fragment key={`note-${message.id}`}>
+              {showDate && (
+                <div className="mb-date-divider">
+                  <span>{dateLabel(message.created_at)}</span>
+                </div>
+              )}
+              <div className="mb-note" role="note">
+                <div className="mb-note-head">
+                  📝 Internal note{message.phone ? ' · customer' : ''} — {message.author_name}
+                  <span className="mb-note-time">{formatTime(message.created_at)}</span>
+                </div>
+                <div className="mb-note-body">{renderMessageText(message.body)}</div>
+              </div>
+            </Fragment>
+          )
+        }
         const isOutgoing = message.direction === 'outgoing'
         const currentKey = dateKey(message.created_at)
         const showDate = currentKey !== lastDateKey
@@ -237,6 +266,9 @@ export default function MessageBubbles({ messages }) {
                 {renderMessageBody(message)}
 
                 <div className="mb-meta">
+                  {isOutgoing && message.sent_by_name && (
+                    <span className="mb-sender">{message.sent_by_name}</span>
+                  )}
                   <span className="mb-time">{formatTime(message.created_at)}</span>
                   {isOutgoing && <StatusTicks status={message.status} />}
                 </div>
