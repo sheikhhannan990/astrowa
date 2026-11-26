@@ -2163,6 +2163,7 @@ FLAG_LABELS = {
     "unreachable": "Unreachable",
     "wrong_number": "Wrong number",
     "whatsapp_failed": "WhatsApp send failed",
+    "refused_before": "Refused before",
 }
 _ADDRESS_FLAGS = {"address_incomplete", "village_address", "no_city", "address_issue"}
 
@@ -2346,11 +2347,38 @@ def set_order_stage(order, stage, by_name, via=None, reason=None, sync_conversat
     return updated
 
 
+_REFUSAL_MESSAGE_PATTERNS = ("%refused to receive%", "%previous order was not received%")
+
+
+def customer_refused_before(phone):
+    """True if this customer had an order returned (marked in the inbox),
+    or was already asked for an advance because of a refused order."""
+    try:
+        returned = (
+            supabase.table("orders").select("id").eq("phone", phone).eq("stage", "returned").limit(1).execute()
+        ).data
+        if returned:
+            return True
+        conv_ids = [c["id"] for c in (
+            supabase.table("conversations").select("id").eq("phone", phone).execute().data or [])]
+        for pattern in _REFUSAL_MESSAGE_PATTERNS:
+            if conv_ids and (
+                supabase.table("messages").select("id").in_("conversation_id", conv_ids)
+                .eq("direction", "outgoing").ilike("body", pattern).limit(1).execute()
+            ).data:
+                return True
+    except Exception as e:
+        log.warning(f"customer_refused_before failed: {e}")
+    return False
+
+
 def record_order(extracted, phone, shopify_order_id, payment_method, conversation_id, extra_flags=()):
     """Create (or refresh) the orders row for a Shopify order. Never raises."""
     try:
         address = extracted.get("shipping_address") or {}
         flags = order_flags(phone, address) + list(extra_flags)
+        if customer_refused_before(phone):
+            flags.append("refused_before")
         existing = (
             supabase.table("orders").select("*").eq("phone", phone)
             .eq("order_number", extracted["order_number"]).limit(1).execute()
@@ -2671,6 +2699,21 @@ def order_action(order_id, staff):
         order = set_order_stage(order, "cancelled", who, reason=reason)
         log_activity(staff, "stage", f"Cancelled {num} ({reason})", conversation_id=conv_id, order_id=order_id)
 
+    elif action == "returned":
+        order = set_order_stage(order, "returned", who, sync_conversation=False)
+        _add_note(staff, conv_id, order_id, f"Order {num} returned / refused at delivery")
+        # Any other open order from this customer now needs an advance.
+        try:
+            others = (
+                supabase.table("orders").select("*").eq("phone", order["phone"])
+                .in_("stage", ["pending", "confirmed"]).execute()
+            ).data or []
+            for other in others:
+                change_flags(other, add=["refused_before"])
+        except Exception as e:
+            log.warning(f"refused_before flag on other orders failed: {e}")
+        log_activity(staff, "stage", f"Marked {num} returned", conversation_id=conv_id, order_id=order_id)
+
     elif action == "reopen":
         order = set_order_stage(order, "pending", who)
         log_activity(staff, "stage", f"Reopened {num} (back to pending)", conversation_id=conv_id, order_id=order_id)
@@ -2760,6 +2803,15 @@ def _add_note(staff, conversation_id, order_id, body, customer_level=False):
         "author_id": staff.get("user_id"),
         "author_name": staff.get("name"),
     }).execute().data or []
+    if conversation_id:
+        try:
+            supabase.table("conversations").update({
+                "last_note": body,
+                "last_note_by": staff.get("name"),
+                "last_note_at": now_utc().isoformat(),
+            }).eq("id", conversation_id).execute()
+        except Exception as e:
+            log.warning(f"last_note update failed (run the simplify SQL?): {e}")
     log_activity(staff, "note", f"Note: {body[:80]}", conversation_id=conversation_id, order_id=order_id)
     return rows[0] if rows else None
 
