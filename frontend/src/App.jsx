@@ -8,7 +8,7 @@ import Today from './views/Today'
 import './App.css'
 
 const NAV = [
-  { id: 'today', label: 'Today', icon: 'M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 16H5V9h14v11zM7 11h5v5H7z' },
+  { id: 'today', label: 'Orders', icon: 'M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 16H5V9h14v11zM7 11h5v5H7z' },
   { id: 'inbox', label: 'Inbox', icon: 'M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z' },
 ]
 
@@ -124,7 +124,7 @@ function Workspace({ staff, onSwitchUser }) {
   const navItems = NAV
 
   let content
-  if (view === 'today') content = <Today data={data} onOpen={openChat} />
+  if (view === 'today') content = <Today data={data} onOpen={openChat} onOrderUpdated={data.upsertOrder} />
   else {
     content = (
       <Inbox

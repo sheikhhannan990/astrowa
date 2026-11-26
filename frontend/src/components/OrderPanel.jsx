@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { orderAction, createNote, errorText } from '../utils/api'
 import {
   STAGE_LABELS, FLAG_LABELS, NOTE_PRESETS, DEFAULT_CANCEL_REASONS,
-  formatPkt, phoneForDialing, deliveryDays,
+  formatPkt, phoneForDialing, deliveryDays, whatsappLink,
 } from '../utils/workflow'
 import './OrderPanel.css'
 
@@ -86,6 +86,17 @@ export default function OrderPanel({ conversation, orders, notes, config, focusO
             </>
           ) : <span>Order</span>}
         </div>
+        {order && (
+          <button
+            type="button"
+            className={`op-star ${(order.flags || []).includes('important') ? 'is-on' : ''}`}
+            onClick={() => run('important', { value: !(order.flags || []).includes('important') })}
+            disabled={busy}
+            title="Mark as important — revisit this order"
+          >
+            {(order.flags || []).includes('important') ? '★ Important' : '☆ Important'}
+          </button>
+        )}
         {onClose && <button type="button" className="op-close" onClick={onClose} aria-label="Close">×</button>}
       </div>
 
@@ -128,6 +139,8 @@ export default function OrderPanel({ conversation, orders, notes, config, focusO
             {/* The buttons that matter for this order's status */}
             <div className="op-actions">
               <a className="op-btn op-btn-call" href={`tel:${phoneForDialing(conversation.phone)}`}>📞 Call</a>
+              <a className="op-btn op-btn-wa" href={whatsappLink(conversation.phone)} target="_blank" rel="noreferrer"
+                title="Open in your other WhatsApp — free follow-up">💬 WhatsApp</a>
               {order.stage === 'pending' && (isBank ? (
                 <button type="button" className="op-btn op-btn-primary" disabled={busy} onClick={() => run('mark_paid', { notify: true })}>✓ Mark paid</button>
               ) : (
